@@ -53,6 +53,9 @@ public class VulkanRenderer
 
     private long nativeHandle = 0;
     private boolean supportProbed = false;
+    private boolean loggedAhbSceneUse = false;
+    // Must be set before attachSurface — nativeCreate reads it once at instance creation.
+    private volatile String graphicsDriverName = null;
 
     private final EffectComposer effectComposer;
     public final ViewTransformation viewTransformation = new ViewTransformation();
@@ -151,9 +154,14 @@ public class VulkanRenderer
 
     // ----- Surface lifecycle (called from XServerSurfaceView) ----------------
 
+    public void setGraphicsDriver(String driverName) {
+        this.graphicsDriverName = driverName;
+    }
+
     public void attachSurface(Surface surface) {
         if (nativeHandle == 0) {
-            nativeHandle = nativeCreate(shouldEnableValidationLayers());
+            nativeHandle = nativeCreate(shouldEnableValidationLayers(),
+                    graphicsDriverName, xServerView.getContext().getApplicationContext());
             if (nativeHandle == 0) {
                 Log.e(TAG, "nativeCreate failed");
                 return;
@@ -333,6 +341,13 @@ public class VulkanRenderer
                     }
                 }
                 if (tex == null || !tex.isAllocated()) continue;
+                if (!loggedAhbSceneUse && tex instanceof GPUImage) {
+                    Log.i(TAG, "Submitting AHB-backed texture in Vulkan scene: windowCount="
+                            + (winCount + 1)
+                            + " tex=0x"
+                            + Long.toHexString(tex.getNativeHandle()));
+                    loggedAhbSceneUse = true;
+                }
                 buf.putLong(OFF_WINDOW_HANDLES + winCount * 8, tex.getNativeHandle());
                 int gOff = OFF_WINDOW_GEOM + winCount * 16;
                 buf.putInt(gOff,      rw.rootX);
@@ -390,8 +405,9 @@ public class VulkanRenderer
                 }
             }
 
-            textureUploadBatch.flush(nativeHandle);
         }
+
+        textureUploadBatch.flush(nativeHandle);
 
         buf.putInt(OFF_WINDOW_COUNT, winCount);
         buf.putLong(OFF_CURSOR_HANDLE, cursorHandle);
@@ -692,7 +708,9 @@ public class VulkanRenderer
 
     // ---- JNI ---------------------------------------------------------------
 
-    private static native long nativeCreate(boolean enableValidationLayers);
+    private static native long nativeCreate(boolean enableValidationLayers,
+                                            String driverName,
+                                            android.content.Context context);
     private static native void nativeDestroy(long handle);
     private static native void nativeSurfaceCreated(long handle, Surface surface);
     private static native void nativeSurfaceChanged(long handle, int w, int h);
