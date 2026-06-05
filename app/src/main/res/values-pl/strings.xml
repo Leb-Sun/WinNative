@@ -1325,5 +1325,36 @@ Zainstalowana ścieżka:
     <string name="workshop_loading_items">Ładowanie elementów Workshop</string>
     <string name="workshop_search_items">Szukaj elementów Workshop</string>
     <string name="common_ui_failed">Niepowodzenie</string>
+    <string name="steam_presence_snooze">Drzemka</string>
+    <string name="steam_presence_busy">Zajęty</string>
+    <string name="steam_presence_looking_to_trade">Chce handlować</string>
+    <string name="steam_presence_looking_to_play">Chce grać</string>
+    <string name="steam_friends_count">Znajomi — %1$d online</string>
+    <string name="steam_friends_section_in_game">W grze (%1$d)</string>
+    <string name="steam_friends_section_online">Online (%1$d)</string>
+    <string name="steam_friends_section_offline">Offline (%1$d)</string>
+    <string name="steam_friends_none_loaded">Nie wczytano jeszcze znajomych.</string>
+    <string name="steam_friends_self_you">Ty</string>
+    <string name="steam_friends_in_game">W grze</string>
+    <string name="steam_friends_join">Dołącz</string>
+    <string name="steam_chat_image_failed">(nie udało się wysłać obrazu)</string>
+    <string name="steam_chat_empty">Brak wiadomości. Przywitaj się!</string>
+    <string name="steam_chat_uploading_image">Wysyłanie obrazu…</string>
+    <string name="steam_chat_send_image">Wyślij obraz</string>
+    <string name="steam_chat_message_hint">Wiadomość…</string>
+    <string name="steam_chat_send">Wyślij</string>
+    <string name="steam_chat_image">Obraz</string>
+    <string name="steam_common_back">Wstecz</string>
+    <string name="steam_achievements_title">Osiągnięcia</string>
+    <string name="steam_achievements_empty">Nie znaleziono osiągnięć dla tej gry,\nlub zaloguj się do Steam, aby je wczytać.</string>
+    <string name="steam_achievements_hidden">Ukryte osiągnięcie</string>
+    <string name="steam_achievements_hidden_desc">Graj dalej, aby odkryć to osiągnięcie.</string>
+    <string name="steam_achievements_unlocked_on">Odblokowano %1$s</string>
+    <string name="steam_achievements_unlocked">Odblokowano</string>
+    <string name="steam_join_joining">Dołączanie do %1$s w %2$s…</string>
+    <string name="steam_join_install">Zainstaluj %1$s, aby dołączyć do %2$s</string>
+    <string name="steam_join_not_owned">Nie posiadasz %1$s</string>
+    <string name="steam_chat_not_sent">(nie wysłano)</string>
+    <string name="steam_join_the_game">grę</string>
 </resources>
 

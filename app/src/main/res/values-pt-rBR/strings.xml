@@ -1319,5 +1319,36 @@ Caminho instalado:
     <string name="workshop_loading_items">Carregando itens do Workshop</string>
     <string name="workshop_search_items">Buscar itens do Workshop</string>
     <string name="common_ui_failed">Falhou</string>
+    <string name="steam_presence_snooze">Soneca</string>
+    <string name="steam_presence_busy">Ocupado</string>
+    <string name="steam_presence_looking_to_trade">Quer trocar</string>
+    <string name="steam_presence_looking_to_play">Quer jogar</string>
+    <string name="steam_friends_count">Amigos — %1$d online</string>
+    <string name="steam_friends_section_in_game">Em jogo (%1$d)</string>
+    <string name="steam_friends_section_online">Online (%1$d)</string>
+    <string name="steam_friends_section_offline">Offline (%1$d)</string>
+    <string name="steam_friends_none_loaded">Nenhum amigo carregado ainda.</string>
+    <string name="steam_friends_self_you">Você</string>
+    <string name="steam_friends_in_game">Em jogo</string>
+    <string name="steam_friends_join">Entrar</string>
+    <string name="steam_chat_image_failed">(falha ao enviar imagem)</string>
+    <string name="steam_chat_empty">Sem mensagens ainda. Diga oi!</string>
+    <string name="steam_chat_uploading_image">Enviando imagem…</string>
+    <string name="steam_chat_send_image">Enviar imagem</string>
+    <string name="steam_chat_message_hint">Mensagem…</string>
+    <string name="steam_chat_send">Enviar</string>
+    <string name="steam_chat_image">Imagem</string>
+    <string name="steam_common_back">Voltar</string>
+    <string name="steam_achievements_title">Conquistas</string>
+    <string name="steam_achievements_empty">Nenhuma conquista encontrada para este jogo,\nou entre no Steam para carregá-las.</string>
+    <string name="steam_achievements_hidden">Conquista oculta</string>
+    <string name="steam_achievements_hidden_desc">Continue jogando para revelar esta conquista.</string>
+    <string name="steam_achievements_unlocked_on">Desbloqueada %1$s</string>
+    <string name="steam_achievements_unlocked">Desbloqueada</string>
+    <string name="steam_join_joining">Entrando com %1$s em %2$s…</string>
+    <string name="steam_join_install">Instale %1$s para entrar com %2$s</string>
+    <string name="steam_join_not_owned">Você não possui %1$s</string>
+    <string name="steam_chat_not_sent">(não enviado)</string>
+    <string name="steam_join_the_game">o jogo</string>
 </resources>
 
