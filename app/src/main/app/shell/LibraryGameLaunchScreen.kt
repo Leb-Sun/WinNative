@@ -46,6 +46,7 @@ import androidx.compose.material.icons.outlined.ArrowDropDown
 import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.Construction
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Home
@@ -137,6 +138,7 @@ internal fun LibraryGameLaunchScreen(
     onBack: () -> Unit,
     onPlay: () -> Unit,
     onSettings: () -> Unit,
+    onAchievements: (() -> Unit)? = null,
     onShortcut: () -> Unit,
     onCloudSaves: () -> Unit,
     onUninstall: () -> Unit,
@@ -383,6 +385,14 @@ internal fun LibraryGameLaunchScreen(
                             size = actionIconSize,
                             onClick = onSettings,
                         )
+                        if (onAchievements != null) {
+                            LaunchIconActionButton(
+                                icon = Icons.Outlined.EmojiEvents,
+                                contentDescription = stringResource(R.string.steam_achievements_title),
+                                size = actionIconSize,
+                                onClick = onAchievements,
+                            )
+                        }
                         LaunchIconActionButton(
                             icon = Icons.Outlined.Home,
                             contentDescription =
