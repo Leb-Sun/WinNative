@@ -35,6 +35,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,7 +62,7 @@ import com.winlator.cmod.feature.stores.steam.data.SteamChatMessage
 import com.winlator.cmod.feature.stores.steam.data.SteamFriendEntry
 import com.winlator.cmod.feature.stores.steam.service.SteamService
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -134,35 +135,31 @@ fun SteamChatScreen(
     LaunchedEffect(friend.steamId) {
         loading = true
         messages.clear()
+        SteamService.instance?.setActiveConversation(friend.steamId)
         messages.addAll(SteamService.instance?.loadChatHistory(friend.steamId) ?: emptyList())
         loading = false
         if (messages.isNotEmpty()) listState.scrollToItem(messages.size - 1)
-        while (true) {
-            delay(1500L)
-            val incoming = SteamService.instance?.drainIncomingMessages() ?: emptyMap()
-            val mine = incoming[friend.steamId]
-            if (!mine.isNullOrEmpty()) {
-                val known = messages.map { it.timestamp to it.ordinal }.toHashSet()
-                var added = false
-                for (m in mine) {
-                    if ((m.timestamp to m.ordinal) in known) continue
-                    val mImg = imageUrlOf(m.text)
-                    val optIdx = if (m.fromSelf) {
-                        messages.indexOfFirst {
-                            it.fromSelf && it.timestamp == 0 &&
-                                (it.text == m.text || (mImg != null && imageUrlOf(it.text) == mImg))
-                        }
-                    } else -1
-                    if (optIdx >= 0) {
-                        messages[optIdx] = m
-                    } else {
-                        messages.add(m)
-                        added = true
-                    }
+        SteamService.instance?.incomingChat?.collect { (fid, m) ->
+            if (fid != friend.steamId) return@collect
+            val known = messages.map { it.timestamp to it.ordinal }.toHashSet()
+            if (m.timestamp != 0 && (m.timestamp to m.ordinal) in known) return@collect
+            val mImg = imageUrlOf(m.text)
+            val optIdx = if (m.fromSelf) {
+                messages.indexOfFirst {
+                    it.fromSelf && it.timestamp == 0 &&
+                        (it.text == m.text || (mImg != null && imageUrlOf(it.text) == mImg))
                 }
-                if (added) listState.animateScrollToItem(messages.size - 1)
+            } else -1
+            if (optIdx >= 0) {
+                messages[optIdx] = m
+            } else {
+                messages.add(m)
+                listState.animateScrollToItem(messages.size - 1)
             }
         }
+    }
+    DisposableEffect(friend.steamId) {
+        onDispose { SteamService.instance?.clearActiveConversation(friend.steamId) }
     }
 
     fun send() {

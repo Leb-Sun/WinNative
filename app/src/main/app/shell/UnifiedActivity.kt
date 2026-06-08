@@ -1418,12 +1418,26 @@ class UnifiedActivity :
         val friends by SteamService.instance?.friendsList?.collectAsState()
             ?: remember { mutableStateOf(emptyList<com.winlator.cmod.feature.stores.steam.data.SteamFriendEntry>()) }
         var chatFriend by remember { mutableStateOf<com.winlator.cmod.feature.stores.steam.data.SteamFriendEntry?>(null) }
+        val friendsDrawerOpen = rightDrawerState.isOpen
         LaunchedEffect(isLoggedIn) {
             if (isLoggedIn) {
                 while (true) {
                     runCatching { SteamService.instance?.refreshFriends() }
                     kotlinx.coroutines.delay(30_000L)
                 }
+            }
+        }
+        LaunchedEffect(isLoggedIn, friendsDrawerOpen) {
+            if (isLoggedIn && friendsDrawerOpen) {
+                while (true) {
+                    runCatching { SteamService.instance?.syncFriendsPresence() }
+                    kotlinx.coroutines.delay(5_000L)
+                }
+            }
+        }
+        LaunchedEffect(isLoggedIn) {
+            if (isLoggedIn) {
+                runCatching { com.winlator.cmod.feature.stores.steam.chat.ChatOverlayService.start(context) }
             }
         }
 

@@ -24,10 +24,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -40,15 +44,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import com.winlator.cmod.R
+import com.winlator.cmod.feature.stores.steam.chat.ChatOverlayService
 import com.winlator.cmod.feature.stores.steam.data.SteamFriend
 import com.winlator.cmod.feature.stores.steam.data.SteamFriendEntry
 import com.winlator.cmod.feature.stores.steam.enums.EPersonaState
+import com.winlator.cmod.feature.stores.steam.utils.PrefManager
 
 private val BgDark = Color(0xFF18181D)
 private val SurfaceDark = Color(0xFF1E252E)
@@ -162,6 +170,7 @@ private fun SectionHeader(text: String) {
 @Composable
 private fun SelfCard(self: SteamFriend, onSetState: (EPersonaState) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
+    var showChatSettings by remember { mutableStateOf(false) }
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = SurfaceDark,
@@ -191,6 +200,17 @@ private fun SelfCard(self: SteamFriend, onSetState: (EPersonaState) -> Unit) {
                         )
                     }
                 }
+                Icon(
+                    Icons.Outlined.Settings,
+                    contentDescription = stringResource(R.string.steam_friends_settings),
+                    tint = TextSecondary,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable { showChatSettings = true }
+                        .padding(6.dp)
+                        .size(20.dp),
+                )
+                Spacer(Modifier.width(2.dp))
                 Text(
                     if (expanded) "▲" else "▼",
                     color = TextSecondary,
@@ -210,6 +230,100 @@ private fun SelfCard(self: SteamFriend, onSetState: (EPersonaState) -> Unit) {
                 }
             }
         }
+    }
+    if (showChatSettings) {
+        ChatSettingsDialog { showChatSettings = false }
+    }
+}
+
+@Composable
+private fun ChatSettingsDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var notifications by remember { mutableStateOf(PrefManager.chatNotificationsEnabled) }
+    var heads by remember { mutableStateOf(PrefManager.chatHeadsEnabled) }
+    var autoHide by remember { mutableStateOf(PrefManager.chatHeadsAutoHide) }
+    var inGame by remember { mutableStateOf(PrefManager.chatInGameEnabled) }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = SurfaceDark,
+            border = BorderStroke(1.dp, CardBorder),
+        ) {
+            Column(Modifier.padding(18.dp).fillMaxWidth()) {
+                Text(
+                    stringResource(R.string.steam_chat_settings_title),
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Spacer(Modifier.height(10.dp))
+                ChatSettingToggle(
+                    stringResource(R.string.steam_chat_setting_notifications),
+                    stringResource(R.string.steam_chat_setting_notifications_desc),
+                    notifications,
+                ) { v -> notifications = v; PrefManager.chatNotificationsEnabled = v }
+                ChatSettingToggle(
+                    stringResource(R.string.steam_chat_setting_heads),
+                    stringResource(R.string.steam_chat_setting_heads_desc),
+                    heads,
+                ) { v ->
+                    if (v) {
+                        if (android.provider.Settings.canDrawOverlays(context)) {
+                            heads = true
+                            PrefManager.chatHeadsEnabled = true
+                            ChatOverlayService.start(context)
+                        } else {
+                            runCatching {
+                                context.startActivity(
+                                    android.content.Intent(
+                                        android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                        android.net.Uri.parse("package:" + context.packageName),
+                                    ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                                )
+                            }
+                        }
+                    } else {
+                        heads = false
+                        PrefManager.chatHeadsEnabled = false
+                        ChatOverlayService.stop(context)
+                    }
+                }
+                ChatSettingToggle(
+                    stringResource(R.string.steam_chat_setting_autohide),
+                    stringResource(R.string.steam_chat_setting_autohide_desc),
+                    autoHide,
+                ) { v -> autoHide = v; PrefManager.chatHeadsAutoHide = v }
+                ChatSettingToggle(
+                    stringResource(R.string.steam_chat_setting_ingame),
+                    stringResource(R.string.steam_chat_setting_ingame_desc),
+                    inGame,
+                ) { v -> inGame = v; PrefManager.chatInGameEnabled = v }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatSettingToggle(
+    title: String,
+    desc: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = TextPrimary, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+            Text(desc, color = TextSecondary, style = MaterialTheme.typography.labelSmall)
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(checkedTrackColor = Accent, checkedThumbColor = Color.White),
+        )
     }
 }
 

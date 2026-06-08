@@ -2240,6 +2240,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     @Override
     public void onResume() {
         super.onResume();
+        com.winlator.cmod.feature.stores.steam.service.GameSessionState.setInGame(this, true);
         applyPreferredRefreshRate();
         registerGyroSensorIfEnabled();
 
@@ -3604,6 +3605,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     @Override
     protected void onDestroy() {
         activityDestroyed.set(true);
+        com.winlator.cmod.feature.stores.steam.service.GameSessionState.setInGame(this, false);
         unregisterDisplayChangeListener();
         if (preloaderDialog != null) {
             preloaderDialog.close();

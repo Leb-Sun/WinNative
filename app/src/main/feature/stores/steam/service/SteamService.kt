@@ -123,7 +123,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.filter
@@ -288,6 +290,22 @@ class SteamService : Service() {
 
     private val _friendsList = MutableStateFlow<List<SteamFriendEntry>>(emptyList())
     val friendsList = _friendsList.asStateFlow()
+
+    private val _incomingChat =
+        MutableSharedFlow<Pair<Long, com.winlator.cmod.feature.stores.steam.data.SteamChatMessage>>(
+            replay = 32,
+            extraBufferCapacity = 256,
+        )
+    val incomingChat = _incomingChat.asSharedFlow()
+
+    private val _unreadCounts = MutableStateFlow<Map<Long, Int>>(emptyMap())
+    val unreadCounts = _unreadCounts.asStateFlow()
+
+    private val _recentChats = MutableStateFlow<Map<Long, Long>>(emptyMap())
+    val recentChats = _recentChats.asStateFlow()
+
+    private val activeConversations = java.util.concurrent.ConcurrentHashMap<Long, Int>()
+    private var messagePollerJob: Job? = null
 
     data class ManifestSizes(
         val installSize: Long = 0L,
@@ -7202,6 +7220,7 @@ class SteamService : Service() {
             instance?.picsGetProductInfoJob?.cancel()
             instance?.picsChangesCheckerJob?.cancel()
             instance?.friendCheckerJob?.cancel()
+            instance?.messagePollerJob?.cancel()
 
             // Emit event synchronously so the UI can react in the same frame
             PluviaApp.events.emit(SteamEvent.LoggedOut(username))
@@ -7983,6 +8002,7 @@ class SteamService : Service() {
         refreshTokenWatchdogJob?.cancel()
         picsChangesCheckerJob?.cancel()
         picsGetProductInfoJob?.cancel()
+        messagePollerJob?.cancel()
         wnSession?.let { s -> runCatching { s.disconnect() } }
         return true
     }
@@ -8051,6 +8071,7 @@ class SteamService : Service() {
         refreshTokenWatchdogJob?.cancel()
         picsChangesCheckerJob?.cancel()
         picsGetProductInfoJob?.cancel()
+        messagePollerJob?.cancel()
         wnSession?.let { s -> runCatching { s.logOffAndDisconnect(500) } }
     }
 
@@ -8355,6 +8376,8 @@ class SteamService : Service() {
         picsChangesCheckerJob = continuousPICSChangesChecker()
         picsGetProductInfoJob?.cancel()
         picsGetProductInfoJob = continuousPICSGetProductInfo()
+        messagePollerJob?.cancel()
+        messagePollerJob = continuousIncomingMessagePoller()
 
         // Repair legacy depots whose stored download>size was frozen by the change-number skip.
         healCorruptManifestDownloadSizes()
@@ -8637,6 +8660,38 @@ class SteamService : Service() {
         }
     }
 
+    suspend fun syncFriendsPresence() {
+        val svc = instance ?: return
+        val current = svc._friendsList.value
+        if (current.isEmpty()) return
+        val json = withContext(Dispatchers.IO) { withWnSession { s -> s.getFriendPersonas() } } ?: return
+        val arr = try { JSONArray(json) } catch (_: Exception) { return }
+        if (arr.length() == 0) return
+        val byId = LinkedHashMap<Long, SteamFriendEntry>(current.size)
+        for (e in current) byId[e.steamId] = e
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val sid = o.optLong("sid", 0L)
+            if (sid == 0L || !byId.containsKey(sid)) continue
+            byId[sid] = SteamFriendEntry(
+                steamId = sid,
+                name = o.optString("name", ""),
+                state = EPersonaState.from(o.optInt("state", 0)) ?: EPersonaState.Offline,
+                gameAppId = o.optInt("app", 0),
+                gameName = o.optString("gameName", ""),
+                avatarHash = o.optString("avatarHash", ""),
+                connectString = o.optString("connect", ""),
+            )
+        }
+        for ((id, entry) in byId.toList()) {
+            if (entry.isOnline && entry.gameName.isBlank() && entry.gameAppId > 0) {
+                val name = resolveGameName(entry.gameAppId)
+                if (name.isNotBlank()) byId[id] = entry.copy(gameName = name)
+            }
+        }
+        svc._friendsList.value = byId.values.toList()
+    }
+
     private val gameNameCache = java.util.concurrent.ConcurrentHashMap<Int, String>()
 
     // appId -> display name: cached, local app DB first, then the public store API.
@@ -8721,6 +8776,80 @@ class SteamService : Service() {
             )
         }
         return grouped
+    }
+
+    fun setActiveConversation(steamId: Long) {
+        if (steamId == 0L) return
+        activeConversations.merge(steamId, 1) { a, b -> a + b }
+        touchRecentChat(steamId)
+        clearUnread(steamId)
+        runCatching { notificationHelper.cancelChatNotification(steamId) }
+    }
+
+    private fun touchRecentChat(friendId: Long) {
+        if (friendId == 0L) return
+        _recentChats.update { it + (friendId to System.currentTimeMillis()) }
+    }
+
+    fun sendChatImageAsync(friendId: Long, bytes: ByteArray, fileName: String) {
+        if (friendId == 0L || bytes.isEmpty()) return
+        scope.launch { sendChatImage(friendId, bytes, fileName) }
+    }
+
+    fun clearActiveConversation(steamId: Long) {
+        if (steamId == 0L) return
+        activeConversations.compute(steamId) { _, v -> if (v == null || v <= 1) null else v - 1 }
+    }
+
+    private fun isActiveConversation(steamId: Long): Boolean = activeConversations.containsKey(steamId)
+
+    fun clearUnread(steamId: Long) {
+        _unreadCounts.update { if (it.containsKey(steamId)) it - steamId else it }
+    }
+
+    private fun continuousIncomingMessagePoller(): Job =
+        scope.launch {
+            while (isActive && isLoggedIn) {
+                delay(1000L)
+                val grouped = runCatching { drainIncomingMessages() }.getOrNull()
+                if (grouped.isNullOrEmpty()) continue
+                dispatchIncomingChat(grouped)
+            }
+        }
+
+    private fun dispatchIncomingChat(
+        grouped: Map<Long, List<com.winlator.cmod.feature.stores.steam.data.SteamChatMessage>>,
+    ) {
+        val friends = _friendsList.value.associateBy { it.steamId }
+        val suppressed = GameSessionState.inGame && !PrefManager.chatInGameEnabled
+        for ((friendId, messages) in grouped) {
+            for (m in messages) _incomingChat.tryEmit(friendId to m)
+            val fromFriend = messages.filter { !it.fromSelf && it.text.isNotBlank() }
+            if (fromFriend.isEmpty()) continue
+            touchRecentChat(friendId)
+            if (isActiveConversation(friendId)) continue
+            _unreadCounts.update { it + (friendId to ((it[friendId] ?: 0) + fromFriend.size)) }
+            if (suppressed) continue
+            val name = friends[friendId]?.name?.ifBlank { friendId.toString() } ?: friendId.toString()
+            val preview = chatPreview(fromFriend.last().text)
+            if (PrefManager.chatNotificationsEnabled) {
+                runCatching { notificationHelper.notifyChatMessage(friendId, name, preview) }
+            }
+            if (PrefManager.chatHeadsEnabled) {
+                runCatching {
+                    com.winlator.cmod.feature.stores.steam.chat.ChatOverlayService.onIncoming(this, friendId)
+                }
+            }
+        }
+    }
+
+    private fun chatPreview(text: String): String {
+        val t = text.trim()
+        return if (t.startsWith("[img") || t.contains("steamusercontent.com")) {
+            getString(com.winlator.cmod.R.string.steam_chat_image)
+        } else {
+            t
+        }
     }
 
     /**
