@@ -1920,6 +1920,21 @@ class UnifiedActivity :
                         val addGameFabMargin = (libraryFabBase * 0.035f).dp.coerceIn(12.dp, 20.dp)
                         val addGameFabIconSize = (libraryFabBase * 0.055f).dp.coerceIn(24.dp, 28.dp)
 
+                        if (drawerState.isClosed) {
+                            DrawerSwipeHotZone(
+                                modifier = Modifier.align(Alignment.CenterStart),
+                                onOpenDrawer = { scope.launch { drawerState.open() } },
+                            )
+                        }
+                        if (rightDrawerState.isClosed) {
+                            DrawerSwipeHotZone(
+                                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 22.dp),
+                                isRightSide = true,
+                                onOpenDrawer = { scope.launch { rightDrawerState.open() } },
+                            )
+                        }
+
+                        // Composed after the hot zones so the FAB stays on top for hit-testing.
                         if (key == "library") {
                             Box(
                                 modifier =
@@ -1945,20 +1960,6 @@ class UnifiedActivity :
                                     modifier = Modifier.size(addGameFabIconSize),
                                 )
                             }
-                        }
-
-                        if (drawerState.isClosed) {
-                            DrawerSwipeHotZone(
-                                modifier = Modifier.align(Alignment.CenterStart),
-                                onOpenDrawer = { scope.launch { drawerState.open() } },
-                            )
-                        }
-                        if (rightDrawerState.isClosed) {
-                            DrawerSwipeHotZone(
-                                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 22.dp),
-                                isRightSide = true,
-                                onOpenDrawer = { scope.launch { rightDrawerState.open() } },
-                            )
                         }
                     }
                 }

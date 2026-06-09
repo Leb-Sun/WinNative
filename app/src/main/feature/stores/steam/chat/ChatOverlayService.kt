@@ -170,7 +170,8 @@ class ChatOverlayService : Service() {
     private val touchHandler = Handler(Looper.getMainLooper())
 
     private val density by lazy { resources.displayMetrics.density }
-    private val bubbleSizePx by lazy { (64 * density).toInt() }
+    // Collapsed chat-head footprint; the bubble window is pinned to this exact size.
+    private val bubbleSizePx by lazy { (56 * density).toInt() }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -790,8 +791,9 @@ class ChatOverlayService : Service() {
 
     private fun buildBubbleParams(): WindowManager.LayoutParams =
         WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            // Fixed size, not WRAP_CONTENT, so the overlay can't mis-measure to full screen.
+            bubbleSizePx,
+            bubbleSizePx,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT,
