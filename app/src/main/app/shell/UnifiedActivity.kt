@@ -4336,6 +4336,7 @@ class UnifiedActivity :
         val epicId = if (isEpic) app.id - 2000000000 else 0
         val isSteamLibraryGame = !isCustom && !isEpic && !isGog
 
+        var showLaunchOptionsDialog by remember(app.id) { mutableStateOf(false) }
         var launchOptions by remember(app.id) { mutableStateOf<List<StoreLaunchOptionItem>>(emptyList()) }
         var selectedLaunchOption by remember(app.id) { mutableStateOf<StoreLaunchOptionItem?>(null) }
         LaunchedEffect(app.id, isSteamLibraryGame) {
@@ -5076,13 +5077,8 @@ class UnifiedActivity :
                                         (!isEpic || epicGame?.isInstalled == true) &&
                                         (!isGog || gogGame?.isInstalled == true),
                                     showWorkshop = !isEpic && !isGog,
-                                    launchOptions = launchOptions,
-                                    selectedLaunchOption = selectedLaunchOption,
-                                    onSelectLaunchOption = { option ->
-                                        persistSteamLaunchOptionSelection(app.id, option, scope) {
-                                            selectedLaunchOption = it
-                                        }
-                                    },
+                                    showLaunchOptions = launchOptions.size >= 2,
+                                    onLaunchOptions = { showLaunchOptionsDialog = true },
                                     areSteamActionsEnabled =
                                         when {
                                             isEpic -> !hasBlockingEpicDownloadForLibrary
@@ -5506,6 +5502,20 @@ class UnifiedActivity :
                         appId = app.id,
                         gameTitle = app.name,
                         onDismissRequest = { showWorkshopDialog = false },
+                    )
+                }
+
+                if (showLaunchOptionsDialog) {
+                    LaunchOptionsDialog(
+                        gameTitle = app.name,
+                        options = launchOptions,
+                        selectedOption = selectedLaunchOption,
+                        onSelect = { option ->
+                            persistSteamLaunchOptionSelection(app.id, option, scope) {
+                                selectedLaunchOption = it
+                            }
+                        },
+                        onDismissRequest = { showLaunchOptionsDialog = false },
                     )
                 }
             }
@@ -8578,6 +8588,7 @@ class UnifiedActivity :
         var isCheckingForUpdate by remember(app.id) { mutableStateOf(false) }
         var isUpdateCheckCoolingDown by remember(app.id) { mutableStateOf(false) }
         var showWorkshopDialog by remember(app.id) { mutableStateOf(false) }
+        var showLaunchOptionsDialog by remember(app.id) { mutableStateOf(false) }
         var launchOptions by remember(app.id) { mutableStateOf<List<StoreLaunchOptionItem>>(emptyList()) }
         var selectedLaunchOption by remember(app.id) { mutableStateOf<StoreLaunchOptionItem?>(null) }
         var updateInfo by remember(app.id) { mutableStateOf<SteamService.SteamUpdateInfo?>(null) }
@@ -8782,11 +8793,8 @@ class UnifiedActivity :
                     showWorkshop = isReallyInstalled,
                     showVerifyFiles = isReallyInstalled,
                     areSteamActionsEnabled = !hasBlockingSteamDownload,
-                    launchOptions = launchOptions,
-                    selectedLaunchOption = selectedLaunchOption,
-                    onSelectLaunchOption = { option ->
-                        persistSteamLaunchOptionSelection(app.id, option, scope) { selectedLaunchOption = it }
-                    },
+                    showLaunchOptions = launchOptions.size >= 2,
+                    onLaunchOptions = { showLaunchOptionsDialog = true },
                     dlcs = dlcItems,
                     selectedDlcIds = selectedDlcIds.toSet(),
                     isDlcSelectionEnabled = steamDownloadRecord == null,
@@ -8923,6 +8931,45 @@ class UnifiedActivity :
                 appId = app.id,
                 gameTitle = app.name,
                 onDismissRequest = { showWorkshopDialog = false },
+            )
+        }
+
+        if (showLaunchOptionsDialog) {
+            LaunchOptionsDialog(
+                gameTitle = app.name,
+                options = launchOptions,
+                selectedOption = selectedLaunchOption,
+                onSelect = { option ->
+                    persistSteamLaunchOptionSelection(app.id, option, scope) { selectedLaunchOption = it }
+                },
+                onDismissRequest = { showLaunchOptionsDialog = false },
+            )
+        }
+    }
+
+    /** Hosts the Workshop-styled launch-option picker window over a game detail dialog. */
+    @Composable
+    private fun LaunchOptionsDialog(
+        gameTitle: String,
+        options: List<StoreLaunchOptionItem>,
+        selectedOption: StoreLaunchOptionItem?,
+        onSelect: (StoreLaunchOptionItem) -> Unit,
+        onDismissRequest: () -> Unit,
+    ) {
+        Dialog(
+            onDismissRequest = onDismissRequest,
+            properties =
+                DialogProperties(
+                    usePlatformDefaultWidth = false,
+                    decorFitsSystemWindows = false,
+                ),
+        ) {
+            StoreLaunchOptionsScreen(
+                gameTitle = gameTitle,
+                options = options,
+                selectedOption = selectedOption,
+                onSelect = onSelect,
+                onClose = onDismissRequest,
             )
         }
     }
