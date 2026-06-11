@@ -92,9 +92,10 @@ import com.winlator.cmod.runtime.display.environment.ImageFs
 import com.winlator.cmod.runtime.system.GPUInformation
 import com.winlator.cmod.runtime.system.SessionKeepAliveService
 import com.winlator.cmod.shared.android.AppTerminationHelper
-import com.winlator.cmod.shared.ui.toast.WinToast
 import com.winlator.cmod.shared.android.NotificationHelper
+import com.winlator.cmod.shared.io.FileUtils
 import com.winlator.cmod.shared.io.StorageUtils
+import com.winlator.cmod.shared.ui.toast.WinToast
 import dagger.hilt.android.AndroidEntryPoint
 import com.winlator.cmod.feature.stores.steam.enums.EDepotFileFlag
 import com.winlator.cmod.feature.stores.steam.enums.ELicenseFlags
@@ -2306,6 +2307,146 @@ class SteamService : Service() {
             return container.executablePath.ifEmpty { getInstalledExe(gameId) }
         }
 
+        private fun findSteamShortcut(
+            context: Context,
+            appId: Int,
+        ) = ContainerManager(context).loadShortcuts().find {
+            it.getExtra("game_source") == "STEAM" && it.getExtra("app_id") == appId.toString()
+        }
+
+        /**
+         * Lightweight read of the Steam shortcut's `[Extra Data]` section straight
+         * from its .desktop file, with the owning container's root dir. Deliberately
+         * NOT findSteamShortcut/loadShortcuts on read-only paths: the Shortcut
+         * constructor decodes cover-art bitmaps, runs PE icon extraction and can
+         * rewrite .desktop files — far too heavy (and write-racy) for hot paths
+         * that only need a couple of strings. Returns null when no Steam shortcut
+         * exists for [appId].
+         */
+        private fun readSteamShortcutExtras(
+            context: Context,
+            appId: Int,
+        ): Pair<Map<String, String>, File>? {
+            val appIdStr = appId.toString()
+            val homeDir = File(ImageFs.find(context).rootDir, "home")
+            val containerDirs =
+                homeDir.listFiles { f -> f.isDirectory && f.name.startsWith("${ImageFs.USER}-") }
+                    ?: return null
+            for (containerDir in containerDirs) {
+                val desktopDir = File(containerDir, ".wine/drive_c/users/${ImageFs.USER}/Desktop")
+                val files = desktopDir.listFiles { f -> f.name.endsWith(".desktop") } ?: continue
+                for (file in files) {
+                    var section = ""
+                    val extras = mutableMapOf<String, String>()
+                    // FileUtils.readLines (also used by Shortcut's parser) returns
+                    // what it could read on IO errors — one corrupt .desktop file
+                    // must not abort the scan of the remaining containers.
+                    for (raw in FileUtils.readLines(file)) {
+                        val line = raw.trim()
+                        if (line.isEmpty() || line.startsWith("#")) continue
+                        if (line.startsWith("[")) {
+                            section = line.substringAfter("[").substringBefore("]")
+                            continue
+                        }
+                        if (section != "Extra Data") continue
+                        val key = line.substringBefore("=", "")
+                        if (key.isNotEmpty()) extras[key] = line.substringAfter("=")
+                    }
+                    if (extras["game_source"] == "STEAM" && extras["app_id"] == appIdStr) {
+                        return extras to containerDir
+                    }
+                }
+            }
+            return null
+        }
+
+        /** Reads executablePath from a container's `.container` config without Container construction. */
+        private fun readContainerExecutablePath(containerDir: File): String =
+            runCatching {
+                val configFile = File(containerDir, ".container")
+                if (!configFile.isFile) return ""
+                JSONObject(configFile.readText()).optString("executablePath", "")
+            }.getOrElse { "" }
+
+        /**
+         * Persists the user's launch-option choice (an appinfo `config.launch` entry) on
+         * the game's shortcut + container, matching resolveRelativeGameExe's priority:
+         * shortcut `launch_exe_path` first, container.executablePath as the synced
+         * fallback. The option's own arguments go to `launch_exe_args`, kept separate
+         * from the user-editable custom args (`execArgs`). Call on an IO dispatcher.
+         */
+        fun setSelectedLaunchOption(
+            context: Context,
+            appId: Int,
+            executable: String,
+            arguments: String,
+        ): Boolean {
+            var shortcut = findSteamShortcut(context, appId)
+            if (shortcut == null) {
+                // Installs from older builds may predate shortcut creation on download.
+                createSteamShortcut(context, appId)
+                shortcut = findSteamShortcut(context, appId)
+            }
+            if (shortcut == null) {
+                Timber.w("setSelectedLaunchOption: no shortcut for appId=$appId")
+                return false
+            }
+            shortcut.putExtra("launch_exe_path", executable)
+            shortcut.putExtra("launch_exe_args", arguments.ifBlank { null })
+            shortcut.saveData()
+            shortcut.container?.let {
+                it.executablePath = executable
+                it.saveData()
+            }
+            return true
+        }
+
+        /**
+         * Currently effective launch option as (executable, arguments), resolved in the
+         * same order the launch path uses: shortcut `launch_exe_path` first, the owning
+         * container's executablePath as fallback, then the installed exe. Reads the
+         * .desktop/.container files directly (this runs on every game-detail open).
+         * Call on an IO dispatcher.
+         */
+        fun getSelectedLaunchOption(
+            context: Context,
+            appId: Int,
+        ): Pair<String, String> {
+            val found = runCatching { readSteamShortcutExtras(context, appId) }.getOrNull()
+            val extras = found?.first.orEmpty()
+            val exe =
+                extras["launch_exe_path"].orEmpty().ifBlank {
+                    found?.second?.let { readContainerExecutablePath(it) }.orEmpty().ifBlank {
+                        getInstalledExe(appId)
+                    }
+                }
+            return exe.replace('\\', '/') to extras["launch_exe_args"].orEmpty()
+        }
+
+        /**
+         * Persists the user's beta-branch choice on the game's shortcut.
+         * Pass a blank [branchName] to clear the selection (reverts to public).
+         * Call on an IO dispatcher.
+         */
+        fun setSelectedBetaBranch(
+            context: Context,
+            appId: Int,
+            branchName: String,
+        ): Boolean {
+            var shortcut = findSteamShortcut(context, appId)
+            if (shortcut == null) {
+                createSteamShortcut(context, appId)
+                shortcut = findSteamShortcut(context, appId)
+            }
+            if (shortcut == null) {
+                Timber.w("setSelectedBetaBranch: no shortcut for appId=$appId")
+                return false
+            }
+            shortcut.putExtra("selectedBranch", branchName.ifBlank { null })
+            shortcut.saveData()
+            return true
+        }
+
         suspend fun deleteApp(appId: Int): Boolean =
             withContext(Dispatchers.IO) {
                 val appDirPath = getAppDirPath(appId)
@@ -2633,7 +2774,7 @@ class SteamService : Service() {
                 appId = appId,
                 downloadableDepots = downloadableDepots,
                 userSelectedDlcAppIds = effectiveDlcAppIds,
-                branch = "public",
+                branch = resolveSelectedBetaName(appId).ifBlank { "public" },
                 includeInstalledDepots = includeInstalledDepots,
                 enableVerify = enableVerify,
                 allowPersistedProgress = allowPersistedProgress,
@@ -4458,6 +4599,8 @@ class SteamService : Service() {
                     runCatching { MarkerUtils.removeMarker(appDirPath, Marker.STEAM_DRM_PATCHED) }
                     runCatching { MarkerUtils.removeMarker(appDirPath, Marker.STEAM_DRM_UNPACK_CHECKED) }
 
+                    pruneStaleDepotManifestCache(appDirPath)
+
                     // Same reason as the runCatching above: a Room exception
                     // here used to FAIL a fully-downloaded game with COMPLETE
                     // marker already on disk.
@@ -5443,13 +5586,7 @@ class SteamService : Service() {
             if (appId <= 0) return ""
             val svc = instance ?: return ""
             return runCatching {
-                for (sc in ContainerManager(svc).loadShortcuts()) {
-                    val scAppId = sc.getExtra("app_id").toIntOrNull() ?: continue
-                    if (scAppId != appId) continue
-                    val branch = sc.getExtra("selectedBranch").trim()
-                    if (branch.isNotEmpty()) return@runCatching branch
-                }
-                ""
+                readSteamShortcutExtras(svc, appId)?.first?.get("selectedBranch").orEmpty().trim()
             }.getOrElse { "" }
         }
 
@@ -7311,12 +7448,12 @@ class SteamService : Service() {
 
         suspend fun isUpdatePending(
             appId: Int,
-            branch: String = "public",
+            branch: String = resolveSelectedBetaName(appId).ifBlank { "public" },
         ): Boolean = checkForAppUpdate(appId, branch).hasUpdate
 
         suspend fun checkForAppUpdate(
             appId: Int,
-            branch: String = "public",
+            branch: String = resolveSelectedBetaName(appId).ifBlank { "public" },
         ): SteamUpdateInfo =
             withContext(Dispatchers.IO) {
                 fun SteamUpdateInfo.logged(): SteamUpdateInfo {
@@ -7426,6 +7563,23 @@ class SteamService : Service() {
             return null
         }
 
+        /**
+         * Best-effort re-fetch + persist of one app's PICS appinfo. Used to heal
+         * cached rows that predate newly parsed fields (e.g. LaunchInfo.arguments).
+         * Returns false when offline / fetch fails; callers keep using the cached row.
+         */
+        suspend fun refreshAppInfoFromPics(appId: Int): Boolean {
+            val fresh =
+                try {
+                    fetchLatestSteamAppInfo(appId)
+                } catch (e: Exception) {
+                    Timber.w(e, "refreshAppInfoFromPics failed for appId=$appId")
+                    null
+                } ?: return false
+            persistLatestSteamAppInfo(appId, fresh)
+            return true
+        }
+
         private suspend fun persistLatestSteamAppInfo(
             appId: Int,
             remoteSteamApp: SteamApp,
@@ -7469,6 +7623,33 @@ class SteamService : Service() {
                 Timber.w(it, "Failed to read Steam depot.config for $appDirPath")
                 emptyMap()
             }
+
+        /**
+         * Prunes stale "{depotId}_{gid}.manifest" caches after a completed
+         * download: a branch switch or ordinary update leaves the previous
+         * build's manifests behind, wasting disk and — when depot.config is
+         * missing an entry — letting checkForAppUpdate's cache fallback mistake
+         * an old build for installed. Keeps only what depot.config says is
+         * current; legacy installs with no depot.config are left untouched
+         * because their fallback needs the cached files.
+         */
+        private fun pruneStaleDepotManifestCache(appDirPath: String) {
+            runCatching {
+                val installedManifests = readInstalledDepotManifestIds(appDirPath)
+                if (installedManifests.isEmpty()) return
+                File(appDirPath, ".DepotDownloader")
+                    .listFiles { f -> f.isFile && f.name.endsWith(".manifest") }
+                    ?.forEach { f ->
+                        val parts = f.name.removeSuffix(".manifest").split('_')
+                        if (parts.size != 2) return@forEach
+                        val depotId = parts[0].toIntOrNull() ?: return@forEach
+                        val gid = parts[1].toLongOrNull() ?: return@forEach
+                        if (installedManifests[depotId] != gid && f.delete()) {
+                            Timber.i("Pruned stale depot manifest cache ${f.name} at $appDirPath")
+                        }
+                    }
+            }.onFailure { e -> Timber.w(e, "Stale manifest prune failed for $appDirPath") }
+        }
 
         private fun cleanupCancelledUpdate(appDirPath: String) {
             MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
