@@ -324,6 +324,30 @@ object PrefManager {
             setString("gog_download_folder", value)
         }
 
+    var chatNotificationsEnabled: Boolean
+        get() = getBoolean("chat_notifications_enabled", true)
+        set(value) {
+            setBoolean("chat_notifications_enabled", value)
+        }
+
+    var chatHeadsEnabled: Boolean
+        get() = getBoolean("chat_heads_enabled", false)
+        set(value) {
+            setBoolean("chat_heads_enabled", value)
+        }
+
+    var chatInGameEnabled: Boolean
+        get() = getBoolean("chat_in_game_enabled", false)
+        set(value) {
+            setBoolean("chat_in_game_enabled", value)
+        }
+
+    var chatHeadsAutoHide: Boolean
+        get() = getBoolean("chat_heads_auto_hide", false)
+        set(value) {
+            setBoolean("chat_heads_auto_hide", value)
+        }
+
     fun clearAuthTokens() {
         requirePrefs().edit().apply {
             remove("user_name")
