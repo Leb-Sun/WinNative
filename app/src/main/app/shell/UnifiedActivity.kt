@@ -216,6 +216,7 @@ import com.winlator.cmod.shared.theme.WinNativeTheme
 import dagger.hilt.android.AndroidEntryPoint
 import dagger.Lazy
 import com.winlator.cmod.feature.stores.steam.enums.EPersonaState
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -370,6 +371,7 @@ class UnifiedActivity :
         lifecycleScope.launch {
             val result =
                 runCatching {
+                    // checkForAppUpdate defaults to the game's selected beta branch.
                     withContext(Dispatchers.IO) { SteamService.checkForAppUpdate(appId) }
                 }.getOrNull()
             try {
@@ -381,8 +383,16 @@ class UnifiedActivity :
                 }
                 result.hasUpdate -> {
                     val started =
-                        withContext(Dispatchers.IO) {
-                            SteamService.downloadAppForUpdate(appId, result.depotIds)
+                        runCatching {
+                            withContext(Dispatchers.IO) {
+                                SteamService.downloadAppForUpdate(appId, result.depotIds)
+                            }
+                        }.getOrElse { e ->
+                            Log.w("UnifiedActivity", "Steam update download failed to start for appId=$appId", e)
+                            taskCheckingShown = false
+                            taskDoneFailed = true
+                            taskDoneMessage = getString(R.string.store_game_update_failed_notice)
+                            return@launch
                         }
                     if (started != null) {
                         showTaskProgressPopup(
@@ -1414,6 +1424,32 @@ class UnifiedActivity :
         val persona by SteamService.instance?.localPersona?.collectAsState()
             ?: remember { mutableStateOf(null) }
         val scope = rememberCoroutineScope()
+        val rightDrawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+        val friends by SteamService.instance?.friendsList?.collectAsState()
+            ?: remember { mutableStateOf(emptyList<com.winlator.cmod.feature.stores.steam.data.SteamFriendEntry>()) }
+        var chatFriend by remember { mutableStateOf<com.winlator.cmod.feature.stores.steam.data.SteamFriendEntry?>(null) }
+        val friendsDrawerOpen = rightDrawerState.isOpen
+        LaunchedEffect(isLoggedIn) {
+            if (isLoggedIn) {
+                while (true) {
+                    runCatching { SteamService.instance?.refreshFriends() }
+                    kotlinx.coroutines.delay(30_000L)
+                }
+            }
+        }
+        LaunchedEffect(isLoggedIn, friendsDrawerOpen) {
+            if (isLoggedIn && friendsDrawerOpen) {
+                while (true) {
+                    runCatching { SteamService.instance?.syncFriendsPresence() }
+                    kotlinx.coroutines.delay(5_000L)
+                }
+            }
+        }
+        LaunchedEffect(isLoggedIn) {
+            if (isLoggedIn) {
+                runCatching { com.winlator.cmod.feature.stores.steam.chat.ChatOverlayService.start(context) }
+            }
+        }
 
         val epicApps by db.epicGameDao().getAll().collectAsState(initial = emptyList())
         val gogApps by db.gogGameDao().getAll().collectAsState(initial = emptyList())
@@ -1641,6 +1677,50 @@ class UnifiedActivity :
             }
         }
 
+        androidx.compose.runtime.CompositionLocalProvider(
+            androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Rtl,
+        ) {
+        ModalNavigationDrawer(
+            drawerState = rightDrawerState,
+            drawerContent = {
+                androidx.compose.runtime.CompositionLocalProvider(
+                    androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr,
+                ) {
+                    com.winlator.cmod.feature.stores.steam.friends.FriendsDrawerContent(
+                        self = persona ?: com.winlator.cmod.feature.stores.steam.data.SteamFriend(),
+                        friends = friends,
+                        onSetState = { st -> scope.launch { SteamService.setPersonaState(st) } },
+                        onOpenChat = { f -> chatFriend = f; scope.launch { rightDrawerState.close() } },
+                        onJoinGame = { f ->
+                            scope.launch { rightDrawerState.close() }
+                            scope.launch {
+                                val app = withContext(Dispatchers.IO) { SteamService.getAppInfoOf(f.gameAppId) }
+                                val installed = withContext(Dispatchers.IO) { SteamService.getInstalledApp(f.gameAppId) }
+                                val label = f.gameName.ifBlank { context.getString(R.string.steam_join_the_game) }
+                                if (app != null && installed != null) {
+                                    android.widget.Toast.makeText(
+                                        context, context.getString(R.string.steam_join_joining, f.name, label), android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                    launchSteamGame(context, ContainerManager(context), app, f.connectString)
+                                } else {
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        if (app != null) context.getString(R.string.steam_join_install, label, f.name)
+                                        else context.getString(R.string.steam_join_not_owned, label),
+                                        android.widget.Toast.LENGTH_LONG,
+                                    ).show()
+                                }
+                            }
+                        },
+                    )
+                }
+            },
+            scrimColor = Color.Black.copy(alpha = 0.5f),
+            gesturesEnabled = rightDrawerState.isOpen,
+        ) {
+        androidx.compose.runtime.CompositionLocalProvider(
+            androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr,
+        ) {
         ModalNavigationDrawer(
             drawerState = drawerState,
             drawerContent = {
@@ -1739,7 +1819,7 @@ class UnifiedActivity :
                         }, persona, context, scope, isControllerConnected, isPS, isLibraryTab, searchQueryTfv, {
                             searchQueryTfv =
                                 it
-                        }, onFilterClicked = { scope.launch { drawerState.open() } }) {
+                        }, onFilterClicked = { scope.launch { drawerState.open() } }, onFriendsClicked = { scope.launch { rightDrawerState.open() } }) {
                             if (selectedLibrarySource == "GOG") {
                                 globalSettingsGogGame = gogApps.find { it.id == selectedGogGameId }
                             } else {
@@ -1850,6 +1930,21 @@ class UnifiedActivity :
                         val addGameFabMargin = (libraryFabBase * 0.035f).dp.coerceIn(12.dp, 20.dp)
                         val addGameFabIconSize = (libraryFabBase * 0.055f).dp.coerceIn(24.dp, 28.dp)
 
+                        if (drawerState.isClosed) {
+                            DrawerSwipeHotZone(
+                                modifier = Modifier.align(Alignment.CenterStart),
+                                onOpenDrawer = { scope.launch { drawerState.open() } },
+                            )
+                        }
+                        if (rightDrawerState.isClosed) {
+                            DrawerSwipeHotZone(
+                                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 22.dp),
+                                isRightSide = true,
+                                onOpenDrawer = { scope.launch { rightDrawerState.open() } },
+                            )
+                        }
+
+                        // Composed after the hot zones so the FAB stays on top for hit-testing.
                         if (key == "library") {
                             Box(
                                 modifier =
@@ -1876,17 +1971,13 @@ class UnifiedActivity :
                                 )
                             }
                         }
-
-                        if (drawerState.isClosed) {
-                            DrawerSwipeHotZone(
-                                modifier = Modifier.align(Alignment.CenterStart),
-                                onOpenDrawer = { scope.launch { drawerState.open() } },
-                            )
-                        }
                     }
                 }
             }
         } // end ModalNavigationDrawer
+        } // end inner LTR
+        } // end right friends ModalNavigationDrawer
+        } // end RTL provider
 
         if (globalSettingsApp != null) {
             GameSettingsDialog(
@@ -1908,8 +1999,19 @@ class UnifiedActivity :
             })
         }
 
+        chatFriend?.let { cf ->
+            com.winlator.cmod.feature.stores.steam.friends.SteamChatScreen(
+                friend = friends.firstOrNull { it.steamId == cf.steamId } ?: cf,
+                onClose = { chatFriend = null },
+            )
+        }
+
         BackHandler(enabled = true) {
-            if (drawerState.isOpen) {
+            if (chatFriend != null) {
+                chatFriend = null
+            } else if (rightDrawerState.isOpen) {
+                scope.launch { rightDrawerState.close() }
+            } else if (drawerState.isOpen) {
                 scope.launch { drawerState.close() }
             } else if (globalSettingsApp != null) {
                 globalSettingsApp = null
@@ -1977,6 +2079,7 @@ class UnifiedActivity :
     @Composable
     private fun DrawerSwipeHotZone(
         modifier: Modifier = Modifier,
+        isRightSide: Boolean = false,
         onOpenDrawer: () -> Unit,
     ) {
         val density = LocalDensity.current
@@ -1986,8 +2089,8 @@ class UnifiedActivity :
             modifier =
                 modifier
                     .fillMaxHeight()
-                    .width(40.dp)
-                    .pointerInput(openThresholdPx) {
+                    .width(if (isRightSide) 30.dp else 40.dp)
+                    .pointerInput(openThresholdPx, isRightSide) {
                         var accumulatedDrag = 0f
                         var opened = false
 
@@ -1997,9 +2100,10 @@ class UnifiedActivity :
                                 opened = false
                             },
                             onHorizontalDrag = { change, dragAmount ->
-                                if (dragAmount <= 0f || opened) return@detectHorizontalDragGestures
+                                val delta = if (isRightSide) -dragAmount else dragAmount
+                                if (delta <= 0f || opened) return@detectHorizontalDragGestures
 
-                                accumulatedDrag += dragAmount
+                                accumulatedDrag += delta
                                 change.consume()
 
                                 if (accumulatedDrag >= openThresholdPx) {
@@ -2026,6 +2130,7 @@ class UnifiedActivity :
         searchQuery: TextFieldValue,
         onSearchQueryChange: (TextFieldValue) -> Unit,
         onFilterClicked: () -> Unit,
+        onFriendsClicked: () -> Unit = {},
         onGameSettingsClicked: () -> Unit,
     ) {
         var isSearchExpanded by remember { mutableStateOf(false) }
@@ -2256,6 +2361,20 @@ class UnifiedActivity :
                         Spacer(Modifier.width(8.dp))
                     }
 
+                    Spacer(Modifier.width(8.dp))
+
+                    Box(
+                        modifier =
+                            Modifier
+                                .size(44.dp)
+                                .shadow(6.dp, CircleShape, spotColor = Color.Black.copy(alpha = 0.5f))
+                                .clip(CircleShape)
+                                .background(SurfaceDark)
+                                .clickable { onFriendsClicked() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Outlined.People, contentDescription = "Friends", tint = TextPrimary, modifier = Modifier.size(24.dp))
+                    }
                     Spacer(Modifier.width(8.dp))
 
                     Box(
@@ -4325,6 +4444,7 @@ class UnifiedActivity :
         val scope = rememberCoroutineScope()
         var currentScreen by remember { mutableStateOf(LibraryDetailScreen.Main) }
         var activePopup by remember { mutableStateOf<LibraryDetailPopup?>(null) }
+        var showAchievements by remember(app.id) { mutableStateOf(false) }
         var shortcutRefreshKey by remember(app.id, gogGame?.id) { mutableStateOf(0) }
         var pinnedShortcutOverride by remember(app.id, gogGame?.id) { mutableStateOf<Boolean?>(null) }
         var showWorkshopDialog by remember(app.id) { mutableStateOf(false) }
@@ -4333,6 +4453,39 @@ class UnifiedActivity :
         val isEpic = app.id >= 2000000000
         val isGog = gogGame != null
         val epicId = if (isEpic) app.id - 2000000000 else 0
+        val isSteamLibraryGame = !isCustom && !isEpic && !isGog
+
+        var showLaunchOptionsDialog by remember(app.id) { mutableStateOf(false) }
+        var launchOptions by remember(app.id) { mutableStateOf<List<StoreLaunchOptionItem>>(emptyList()) }
+        var selectedLaunchOption by remember(app.id) { mutableStateOf<StoreLaunchOptionItem?>(null) }
+        var showBetaBranchesDialog by remember(app.id) { mutableStateOf(false) }
+        var betaBranches by remember(app.id) { mutableStateOf<List<StoreBetaBranchItem>>(emptyList()) }
+        var selectedBetaBranch by remember(app.id) { mutableStateOf<StoreBetaBranchItem?>(null) }
+        LaunchedEffect(app.id, isSteamLibraryGame) {
+            val steamInstalled =
+                isSteamLibraryGame && withContext(Dispatchers.IO) { SteamService.isAppInstalled(app.id) }
+            if (!steamInstalled) {
+                launchOptions = emptyList()
+                selectedLaunchOption = null
+                betaBranches = emptyList()
+                selectedBetaBranch = null
+                return@LaunchedEffect
+            }
+            // Degrade to hidden menu items (logged) rather than crash the dialog.
+            runCatching {
+                loadSteamLaunchOptionsRefreshing(app.id) { options, selected ->
+                    launchOptions = options
+                    selectedLaunchOption = selected
+                }
+                loadSteamBetaBranchesRefreshing(app.id) { branches, selected ->
+                    betaBranches = branches
+                    selectedBetaBranch = selected
+                }
+            }.onFailure { e ->
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.e("UnifiedActivity", "Steam game-detail extras load failed for appId=${app.id}", e)
+            }
+        }
 
         val libraryDownloadRecords by com.winlator.cmod.app.service.download.DownloadCoordinator.records.collectAsState(
             initial = com.winlator.cmod.app.service.download.DownloadCoordinator.snapshotRecords(),
@@ -5002,6 +5155,9 @@ class UnifiedActivity :
                                             ShortcutSettingsComposeDialog(this@UnifiedActivity, shortcut).show()
                                         }
                                     },
+                                    onAchievements = if (!isCustom && !isEpic && !isGog) {
+                                        { showAchievements = true }
+                                    } else null,
                                     onShortcut = {
                                         if (hasPinnedShortcut) {
                                             currentScreen = LibraryDetailScreen.Shortcut
@@ -5053,6 +5209,18 @@ class UnifiedActivity :
                                         (!isEpic || epicGame?.isInstalled == true) &&
                                         (!isGog || gogGame?.isInstalled == true),
                                     showWorkshop = !isEpic && !isGog,
+                                    onLaunchOptions =
+                                        if (launchOptions.size >= 2) {
+                                            { showLaunchOptionsDialog = true }
+                                        } else {
+                                            null
+                                        },
+                                    onBetaBranches =
+                                        if (betaBranches.size >= 2) {
+                                            { showBetaBranchesDialog = true }
+                                        } else {
+                                            null
+                                        },
                                     areSteamActionsEnabled =
                                         when {
                                             isEpic -> !hasBlockingEpicDownloadForLibrary
@@ -5310,6 +5478,22 @@ class UnifiedActivity :
                         }
                     }
 
+                    if (showAchievements) {
+                        Dialog(
+                            onDismissRequest = { showAchievements = false },
+                            properties = DialogProperties(
+                                usePlatformDefaultWidth = false,
+                                dismissOnClickOutside = false,
+                            ),
+                        ) {
+                            com.winlator.cmod.feature.stores.steam.achievements.SteamAchievementsScreen(
+                                appId = app.id,
+                                appName = app.name,
+                                onClose = { showAchievements = false },
+                            )
+                        }
+                    }
+
                     activePopup?.let { popup ->
                         LibraryDetailPopupFrame(
                             title =
@@ -5476,6 +5660,40 @@ class UnifiedActivity :
                         appId = app.id,
                         gameTitle = app.name,
                         onDismissRequest = { showWorkshopDialog = false },
+                    )
+                }
+
+                if (showLaunchOptionsDialog) {
+                    LaunchOptionsDialog(
+                        appId = app.id,
+                        gameTitle = app.name,
+                        options = launchOptions,
+                        selectedOption = selectedLaunchOption,
+                        onSelectionSaved = { selectedLaunchOption = it },
+                        onDismissRequest = { showLaunchOptionsDialog = false },
+                    )
+                }
+
+                if (showBetaBranchesDialog) {
+                    BetaBranchesDialog(
+                        gameTitle = app.name,
+                        branches = betaBranches,
+                        selectedBranch = selectedBetaBranch,
+                        onSelect = { item ->
+                            persistSteamBetaBranchSelection(
+                                appId = app.id,
+                                item = item,
+                                scope = scope,
+                                onSaved = { saved ->
+                                    selectedBetaBranch = saved
+                                    // Close the picker so the update-check flow it
+                                    // triggers is what the user sees next.
+                                    showBetaBranchesDialog = false
+                                },
+                                startUpdate = { startUpdateCheck(app.id, app.name) },
+                            )
+                        },
+                        onDismissRequest = { showBetaBranchesDialog = false },
                     )
                 }
             }
@@ -8467,6 +8685,191 @@ class UnifiedActivity :
         }
     }
 
+    // Apps whose appinfo was already re-fetched this process (see
+    // refreshAppInfoFromPicsOnce) — avoids a PICS round-trip on every
+    // game-detail open.
+    private val appinfoRefreshedApps = java.util.Collections.synchronizedSet(mutableSetOf<Int>())
+
+    /**
+     * Builds the Steam launch-option list (appinfo config.launch) for the STEAM
+     * dropdown on both game detail screens, plus the currently effective selection.
+     */
+    private suspend fun loadSteamLaunchOptions(appId: Int): Pair<List<StoreLaunchOptionItem>, StoreLaunchOptionItem?> =
+        withContext(Dispatchers.IO) {
+            val appDir = java.io.File(SteamService.getAppDirPath(appId))
+            val allOptions =
+                SteamService
+                    .getWindowsLaunchInfos(appId)
+                    .map { info ->
+                        StoreLaunchOptionItem(
+                            executable = info.executable,
+                            arguments = info.arguments,
+                            label = info.description.ifBlank { info.executable.substringAfterLast('/') },
+                        )
+                    }
+                    // Label is part of the key: cached appinfo rows predating
+                    // LaunchInfo.arguments have "" args, and exe+args alone would
+                    // collapse distinct options like "Play (DX11)" / "Play (DX12)".
+                    .distinctBy { Triple(it.executable.lowercase(), it.arguments, it.label) }
+            // Hide options whose exe is missing on disk, but if that empties a
+            // non-empty list (case-sensitivity quirks) keep the unfiltered set.
+            val onDisk = allOptions.filter { java.io.File(appDir, it.executable).isFile }
+            val options = onDisk.ifEmpty { allOptions }
+            val (selectedExe, selectedArgs) = SteamService.getSelectedLaunchOption(applicationContext, appId)
+            val selected =
+                options.firstOrNull {
+                    it.executable.equals(selectedExe, ignoreCase = true) && it.arguments == selectedArgs
+                } ?: options.firstOrNull { it.executable.equals(selectedExe, ignoreCase = true) }
+                    ?: options.firstOrNull()
+            options to selected
+        }
+
+    /**
+     * Re-fetches [appId]'s PICS appinfo at most once per process — shared by
+     * the launch-options and beta-branch loaders so one round-trip feeds both.
+     * Returns true when this call performed the refresh; a failed fetch
+     * (offline) releases the slot so the next game-detail open retries.
+     */
+    private suspend fun refreshAppInfoFromPicsOnce(appId: Int): Boolean {
+        if (!appinfoRefreshedApps.add(appId)) return false
+        if (SteamService.refreshAppInfoFromPics(appId)) return true
+        appinfoRefreshedApps.remove(appId)
+        return false
+    }
+
+    /**
+     * Loads launch options, then — once per app per process — re-fetches the
+     * app's PICS appinfo to heal cached rows that predate LaunchInfo.arguments
+     * and re-applies the fresh list. [apply] runs on the caller's context.
+     */
+    private suspend fun loadSteamLaunchOptionsRefreshing(
+        appId: Int,
+        apply: (List<StoreLaunchOptionItem>, StoreLaunchOptionItem?) -> Unit,
+    ) {
+        val (options, selected) = loadSteamLaunchOptions(appId)
+        apply(options, selected)
+        if (refreshAppInfoFromPicsOnce(appId)) {
+            val (fresh, freshSelected) = loadSteamLaunchOptions(appId)
+            apply(fresh, freshSelected)
+        }
+    }
+
+    private fun persistSteamLaunchOptionSelection(
+        appId: Int,
+        option: StoreLaunchOptionItem,
+        scope: CoroutineScope,
+        onSaved: (StoreLaunchOptionItem) -> Unit,
+    ) {
+        scope.launch(Dispatchers.IO) {
+            val saved =
+                SteamService.setSelectedLaunchOption(
+                    applicationContext,
+                    appId,
+                    option.executable,
+                    option.arguments,
+                )
+            withContext(Dispatchers.Main) {
+                if (saved) {
+                    onSaved(option)
+                } else {
+                    com.winlator.cmod.shared.ui.toast.WinToast.show(
+                        this@UnifiedActivity,
+                        getString(R.string.store_game_launch_option_failed),
+                        android.widget.Toast.LENGTH_SHORT,
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun loadSteamBetaBranches(appId: Int): Pair<List<StoreBetaBranchItem>, StoreBetaBranchItem?> =
+        withContext(Dispatchers.IO) {
+            val branches =
+                SteamService.getAppInfoOf(appId)
+                    ?.branches
+                    ?.values
+                    ?.map { b -> StoreBetaBranchItem(b.name, b.buildId, b.timeUpdated, b.pwdRequired) }
+                    ?.sortedWith(compareBy({ !it.name.equals("public", ignoreCase = true) }, { it.name }))
+                    .orEmpty()
+            // recoverSelectedBetaName also heals selections lost to an app
+            // reinstall (shortcuts are app-private; game files survive).
+            val selectedName = SteamService.recoverSelectedBetaName(appId).ifBlank { "public" }
+            val selected =
+                branches.firstOrNull { it.name.equals(selectedName, ignoreCase = true) }
+                    // Selected beta may have been retired from PICS — fall back to public.
+                    ?: branches.firstOrNull { it.name.equals("public", ignoreCase = true) }
+            branches to selected
+        }
+
+    /**
+     * Loads beta branches, then — once per app per process — re-fetches the
+     * app's PICS appinfo for current branch build ids and re-applies the
+     * fresh list. [apply] runs on the caller's context.
+     */
+    private suspend fun loadSteamBetaBranchesRefreshing(
+        appId: Int,
+        apply: (List<StoreBetaBranchItem>, StoreBetaBranchItem?) -> Unit,
+    ) {
+        val (branches, selected) = loadSteamBetaBranches(appId)
+        apply(branches, selected)
+        if (refreshAppInfoFromPicsOnce(appId)) {
+            val (fresh, freshSelected) = loadSteamBetaBranches(appId)
+            apply(fresh, freshSelected)
+        }
+    }
+
+    /**
+     * Commits a staged pre-install branch pick right before the download starts,
+     * so downloadApp (and any later resume) resolves it from the shortcut.
+     * Custom path is persisted first: the shortcut snapshots game_install_path
+     * at creation and is never rewritten. On failure (no usable container yet)
+     * the install proceeds on the public branch rather than blocking.
+     */
+    private suspend fun commitPendingBetaBranch(
+        appId: Int,
+        item: StoreBetaBranchItem,
+        customPath: String?,
+    ) {
+        customPath?.let { SteamService.setCustomInstallPath(appId, it) }
+        val branchName = if (item.name.equals("public", ignoreCase = true)) "" else item.name
+        if (!SteamService.setSelectedBetaBranch(applicationContext, appId, branchName)) {
+            withContext(Dispatchers.Main) {
+                com.winlator.cmod.shared.ui.toast.WinToast.show(
+                    this@UnifiedActivity,
+                    getString(R.string.store_game_beta_branch_failed),
+                    android.widget.Toast.LENGTH_SHORT,
+                )
+            }
+        }
+    }
+
+    private fun persistSteamBetaBranchSelection(
+        appId: Int,
+        item: StoreBetaBranchItem,
+        scope: CoroutineScope,
+        onSaved: (StoreBetaBranchItem) -> Unit,
+        startUpdate: () -> Unit,
+    ) {
+        scope.launch(Dispatchers.IO) {
+            // "public" is the implicit default — store blank so resolveSelectedBetaName
+            // keeps returning "" for games the user never switched.
+            val branchName = if (item.name.equals("public", ignoreCase = true)) "" else item.name
+            val saved = SteamService.setSelectedBetaBranch(applicationContext, appId, branchName)
+            withContext(Dispatchers.Main) {
+                if (saved) {
+                    onSaved(item)
+                    startUpdate()
+                } else {
+                    com.winlator.cmod.shared.ui.toast.WinToast.show(
+                        this@UnifiedActivity,
+                        getString(R.string.store_game_beta_branch_failed),
+                        android.widget.Toast.LENGTH_SHORT,
+                    )
+                }
+            }
+        }
+    }
+
     // Game Manager Dialog
     @Composable
     fun GameManagerDialog(
@@ -8486,6 +8889,14 @@ class UnifiedActivity :
         var isCheckingForUpdate by remember(app.id) { mutableStateOf(false) }
         var isUpdateCheckCoolingDown by remember(app.id) { mutableStateOf(false) }
         var showWorkshopDialog by remember(app.id) { mutableStateOf(false) }
+        var showLaunchOptionsDialog by remember(app.id) { mutableStateOf(false) }
+        var launchOptions by remember(app.id) { mutableStateOf<List<StoreLaunchOptionItem>>(emptyList()) }
+        var selectedLaunchOption by remember(app.id) { mutableStateOf<StoreLaunchOptionItem?>(null) }
+        var showBetaBranchesDialog by remember(app.id) { mutableStateOf(false) }
+        var betaBranches by remember(app.id) { mutableStateOf<List<StoreBetaBranchItem>>(emptyList()) }
+        var selectedBetaBranch by remember(app.id) { mutableStateOf<StoreBetaBranchItem?>(null) }
+        // Pre-install branch choice, staged until the Download button commits it.
+        var pendingBetaBranch by remember(app.id) { mutableStateOf<StoreBetaBranchItem?>(null) }
         var updateInfo by remember(app.id) { mutableStateOf<SteamService.SteamUpdateInfo?>(null) }
         var updateStatusText by remember(app.id) { mutableStateOf<String?>(null) }
         val downloadRecords by com.winlator.cmod.app.service.download.DownloadCoordinator.records.collectAsState(
@@ -8515,13 +8926,18 @@ class UnifiedActivity :
             val installed: Boolean,
         )
 
-        LaunchedEffect(app.id, downloadRecords) {
+        LaunchedEffect(app.id, downloadRecords, pendingBetaBranch) {
             val loadData =
                 withContext(Dispatchers.IO) {
+                    // Size the same branch the download will actually fetch — the
+                    // staged pre-install pick wins over the persisted selection.
+                    val branch =
+                        pendingBetaBranch?.name
+                            ?: SteamService.resolveSelectedBetaName(app.id).ifBlank { "public" }
                     val selectableDlcApps = SteamService.getSelectableDlcAppsOf(app.id)
                     val perDlcSizes =
                         selectableDlcApps.associate { dlc ->
-                            dlc.id to SteamService.getDlcOnlyManifestSizes(app.id, dlc.id)
+                            dlc.id to SteamService.getDlcOnlyManifestSizes(app.id, dlc.id, branch = branch)
                         }
                     val installedDlcIds =
                         SteamService.getInstalledDlcDepotsOf(app.id)
@@ -8531,7 +8947,7 @@ class UnifiedActivity :
                         dlcApps = selectableDlcApps,
                         dlcSizes = perDlcSizes,
                         installedDlcIds = installedDlcIds,
-                        baseManifestSizes = SteamService.getInstallableSelectedManifestSizes(app.id),
+                        baseManifestSizes = SteamService.getInstallableSelectedManifestSizes(app.id, branch = branch),
                         installed = SteamService.isAppInstalled(app.id),
                     )
                 }
@@ -8544,11 +8960,46 @@ class UnifiedActivity :
             isLoading = false
         }
 
-        LaunchedEffect(app.id, selectedDlcIds.toList()) {
+        LaunchedEffect(app.id, selectedDlcIds.toList(), pendingBetaBranch) {
             selectedManifestSizes =
                 withContext(Dispatchers.IO) {
-                    SteamService.getInstallableSelectedManifestSizes(app.id, selectedDlcIds.toList())
+                    val branch =
+                        pendingBetaBranch?.name
+                            ?: SteamService.resolveSelectedBetaName(app.id).ifBlank { "public" }
+                    SteamService.getInstallableSelectedManifestSizes(app.id, selectedDlcIds.toList(), branch = branch)
                 }
+        }
+
+        LaunchedEffect(app.id, installed) {
+            // Wait for the install state so the pre-install branch cutout can't
+            // flash on a game that then resolves to installed.
+            if (installed == null) return@LaunchedEffect
+            if (installed == true) {
+                // A staged pre-install pick is meaningless once the game is
+                // installed (it was either committed by Download or abandoned).
+                pendingBetaBranch = null
+            } else {
+                launchOptions = emptyList()
+                selectedLaunchOption = null
+            }
+            // Degrade to hidden menu items (logged) rather than crash the dialog.
+            runCatching {
+                if (installed == true) {
+                    loadSteamLaunchOptionsRefreshing(app.id) { options, selected ->
+                        launchOptions = options
+                        selectedLaunchOption = selected
+                    }
+                }
+                // Branches load for both states: installed games switch via the
+                // STEAM menu, uninstalled games via the Download-button cutout.
+                loadSteamBetaBranchesRefreshing(app.id) { branches, selected ->
+                    betaBranches = branches
+                    selectedBetaBranch = selected
+                }
+            }.onFailure { e ->
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.e("UnifiedActivity", "Steam game-detail extras load failed for appId=${app.id}", e)
+            }
         }
 
         val totalDownloadSize = selectedManifestSizes.downloadSize
@@ -8671,6 +9122,18 @@ class UnifiedActivity :
                     showWorkshop = isReallyInstalled,
                     showVerifyFiles = isReallyInstalled,
                     areSteamActionsEnabled = !hasBlockingSteamDownload,
+                    onLaunchOptions =
+                        if (launchOptions.size >= 2) {
+                            { showLaunchOptionsDialog = true }
+                        } else {
+                            null
+                        },
+                    onBetaBranches =
+                        if (betaBranches.size >= 2) {
+                            { showBetaBranchesDialog = true }
+                        } else {
+                            null
+                        },
                     dlcs = dlcItems,
                     selectedDlcIds = selectedDlcIds.toSet(),
                     isDlcSelectionEnabled = steamDownloadRecord == null,
@@ -8689,6 +9152,9 @@ class UnifiedActivity :
                                 val installableDlcIds = dlcItems
                                     .filter { !it.isInstalled && it.id in selectedDlcIds }
                                     .map { it.id }
+                                if (installed != true) {
+                                    pendingBetaBranch?.let { commitPendingBetaBranch(app.id, it, customPath) }
+                                }
                                 SteamService.downloadApp(app.id, installableDlcIds, false, customPath)
                                 withContext(Dispatchers.Main) { onDismissRequest() }
                             }
@@ -8807,6 +9273,114 @@ class UnifiedActivity :
                 appId = app.id,
                 gameTitle = app.name,
                 onDismissRequest = { showWorkshopDialog = false },
+            )
+        }
+
+        if (showLaunchOptionsDialog) {
+            LaunchOptionsDialog(
+                appId = app.id,
+                gameTitle = app.name,
+                options = launchOptions,
+                selectedOption = selectedLaunchOption,
+                onSelectionSaved = { selectedLaunchOption = it },
+                onDismissRequest = { showLaunchOptionsDialog = false },
+            )
+        }
+
+        if (showBetaBranchesDialog) {
+            BetaBranchesDialog(
+                gameTitle = app.name,
+                branches = betaBranches,
+                // pendingBetaBranch is null for installed games (cleared on install).
+                selectedBranch = pendingBetaBranch ?: selectedBetaBranch,
+                onSelect = { item ->
+                    if (installed == true) {
+                        persistSteamBetaBranchSelection(
+                            appId = app.id,
+                            item = item,
+                            scope = scope,
+                            onSaved = { saved ->
+                                selectedBetaBranch = saved
+                                // Close the picker so the update-check flow it
+                                // triggers is what the user sees next.
+                                showBetaBranchesDialog = false
+                            },
+                            startUpdate = { startUpdateCheck(app.id, app.name) },
+                        )
+                    } else {
+                        // Pre-install: stage only — the Download button commits.
+                        pendingBetaBranch = item
+                        showBetaBranchesDialog = false
+                    }
+                },
+                onDismissRequest = { showBetaBranchesDialog = false },
+            )
+        }
+    }
+
+    /**
+     * Hosts the Workshop-styled launch-option picker window over a game detail
+     * dialog. Selecting a row persists it as the game's default and reports the
+     * saved option through [onSelectionSaved].
+     */
+    @Composable
+    private fun LaunchOptionsDialog(
+        appId: Int,
+        gameTitle: String,
+        options: List<StoreLaunchOptionItem>,
+        selectedOption: StoreLaunchOptionItem?,
+        onSelectionSaved: (StoreLaunchOptionItem) -> Unit,
+        onDismissRequest: () -> Unit,
+    ) {
+        val scope = rememberCoroutineScope()
+        Dialog(
+            onDismissRequest = onDismissRequest,
+            properties =
+                DialogProperties(
+                    usePlatformDefaultWidth = false,
+                    decorFitsSystemWindows = false,
+                ),
+        ) {
+            StoreLaunchOptionsScreen(
+                gameTitle = gameTitle,
+                options = options,
+                selectedOption = selectedOption,
+                onSelect = { option ->
+                    persistSteamLaunchOptionSelection(appId, option, scope, onSelectionSaved)
+                },
+                onClose = onDismissRequest,
+            )
+        }
+    }
+
+    /**
+     * Hosts the Workshop-styled beta-branch picker window over a game detail
+     * dialog. What a row tap means is the host's call via [onSelect]: installed
+     * games persist + start the update flow, pre-install games just stage the
+     * choice until the Download button commits it.
+     */
+    @Composable
+    private fun BetaBranchesDialog(
+        gameTitle: String,
+        branches: List<StoreBetaBranchItem>,
+        selectedBranch: StoreBetaBranchItem?,
+        onSelect: (StoreBetaBranchItem) -> Unit,
+        onDismissRequest: () -> Unit,
+    ) {
+        Dialog(
+            onDismissRequest = onDismissRequest,
+            properties =
+                DialogProperties(
+                    usePlatformDefaultWidth = false,
+                    decorFitsSystemWindows = false,
+                ),
+        ) {
+            StoreBetaBranchScreen(
+                gameTitle = gameTitle,
+                branches = branches,
+                selectedBranch = selectedBranch,
+                onSelect = onSelect,
+                onClose = onDismissRequest,
             )
         }
     }
@@ -9355,6 +9929,7 @@ class UnifiedActivity :
         context: android.content.Context,
         containerManager: ContainerManager,
         app: SteamApp,
+        joinConnect: String? = null,
     ) {
         lifecycleScope.launch(Dispatchers.IO) {
             val gameInstallPath = SteamService.getAppDirPath(app.id)
@@ -9417,6 +9992,7 @@ class UnifiedActivity :
                 intent.putExtra("container_id", shortcut.container.id)
                 intent.putExtra("shortcut_path", shortcut.file.path)
                 intent.putExtra("shortcut_name", shortcut.name)
+                if (!joinConnect.isNullOrBlank()) intent.putExtra("steam_join_connect", joinConnect)
                 withContext(Dispatchers.Main) {
                     launchGame(context, intent)
                 }
@@ -9461,6 +10037,7 @@ class UnifiedActivity :
                 intent.putExtra("container_id", container.id)
                 intent.putExtra("shortcut_path", shortcutFile.path)
                 intent.putExtra("shortcut_name", app.name)
+                if (!joinConnect.isNullOrBlank()) intent.putExtra("steam_join_connect", joinConnect)
                 withContext(Dispatchers.Main) {
                     launchGame(context, intent)
                 }
@@ -10242,8 +10819,6 @@ class UnifiedActivity :
         onImmersiveBlurChanged: (Boolean) -> Unit,
         onExitApp: () -> Unit,
     ) {
-        val currentState = persona?.state ?: EPersonaState.Online
-        var statusExpanded by remember { mutableStateOf(false) }
 
         ModalDrawerSheet(
             drawerShape = RectangleShape,
@@ -10259,176 +10834,6 @@ class UnifiedActivity :
                     .verticalScroll(rememberScrollState())
                     .padding(20.dp),
             ) {
-                // ── Avatar Card ──
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = SurfaceDark,
-                    border = BorderStroke(1.dp, CardBorder),
-                    modifier =
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                            ) { statusExpanded = !statusExpanded },
-                ) {
-                    Column(Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            val avatarUrl =
-                                persona?.avatarHash?.getAvatarURL()
-                                    ?: "https://steamcdn-a.akamaihd.net/steamcommunity/public/images/avatars/fe/fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb_full.jpg"
-
-                            Box(
-                                modifier =
-                                    Modifier
-                                        .size(48.dp)
-                                        .clip(CircleShape),
-                            ) {
-                                AsyncImage(
-                                    model =
-                                        ImageRequest
-                                            .Builder(context)
-                                            .data(avatarUrl)
-                                            .crossfade(true)
-                                            .build(),
-                                    contentDescription = "Profile",
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop,
-                                )
-                            }
-
-                            Spacer(Modifier.width(12.dp))
-
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    text = persona?.name ?: stringResource(R.string.stores_accounts_not_signed_in),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                val statusLabel =
-                                    when (currentState) {
-                                        EPersonaState.Online -> stringResource(R.string.stores_accounts_status_online)
-                                        EPersonaState.Away -> stringResource(R.string.stores_accounts_status_away)
-                                        else -> stringResource(R.string.stores_accounts_status_offline)
-                                    }
-                                val statusColor =
-                                    when (currentState) {
-                                        EPersonaState.Online -> StatusOnline
-                                        EPersonaState.Away -> StatusAway
-                                        else -> StatusOffline
-                                    }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(Modifier.size(8.dp).background(statusColor, CircleShape))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(statusLabel, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-                                }
-                            }
-
-                            val chevronRotation by animateFloatAsState(
-                                targetValue = if (statusExpanded) 90f else 0f,
-                                animationSpec = tween(250),
-                                label = "chevronRotation",
-                            )
-                            Icon(
-                                Icons.Outlined.ChevronRight,
-                                contentDescription = "Toggle status",
-                                tint = TextSecondary,
-                                modifier =
-                                    Modifier
-                                        .size(20.dp)
-                                        .graphicsLayer { rotationZ = chevronRotation },
-                            )
-                        }
-
-                        // Expandable status options
-                        AnimatedVisibility(visible = statusExpanded) {
-                            Column(Modifier.padding(top = 12.dp)) {
-                                HorizontalDivider(color = TextSecondary.copy(alpha = 0.2f))
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    stringResource(R.string.stores_accounts_status_header),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = TextSecondary,
-                                )
-                                Spacer(Modifier.height(8.dp))
-
-                                listOf(
-                                    Triple(EPersonaState.Online, stringResource(R.string.stores_accounts_status_online), StatusOnline),
-                                    Triple(EPersonaState.Away, stringResource(R.string.stores_accounts_status_away), StatusAway),
-                                    Triple(
-                                        EPersonaState.Invisible,
-                                        stringResource(R.string.stores_accounts_status_invisible),
-                                        StatusOffline,
-                                    ),
-                                ).forEach { (state, label, color) ->
-                                    val isSelected = currentState == state
-                                    val rowBg by animateColorAsState(
-                                        targetValue = if (isSelected) Accent.copy(alpha = 0.12f) else Color.Transparent,
-                                        animationSpec = tween(250),
-                                        label = "statusRowBg",
-                                    )
-                                    val borderAlpha by animateFloatAsState(
-                                        targetValue = if (isSelected) 1f else 0f,
-                                        animationSpec = tween(250),
-                                        label = "statusBorder",
-                                    )
-                                    val checkScale by animateFloatAsState(
-                                        targetValue = if (isSelected) 1f else 0f,
-                                        animationSpec =
-                                            spring(
-                                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                                stiffness = Spring.StiffnessMedium,
-                                            ),
-                                        label = "checkScale",
-                                    )
-                                    Row(
-                                        modifier =
-                                            Modifier
-                                                .fillMaxWidth()
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(rowBg)
-                                                .border(1.dp, Accent.copy(alpha = 0.4f * borderAlpha), RoundedCornerShape(8.dp))
-                                                .clickable(
-                                                    interactionSource = remember { MutableInteractionSource() },
-                                                    indication = null,
-                                                ) {
-                                                    scope.launch {
-                                                        SteamService.setPersonaState(state)
-                                                        statusExpanded = false
-                                                    }
-                                                }.padding(horizontal = 12.dp, vertical = 10.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    ) {
-                                        Box(Modifier.size(10.dp).background(color, CircleShape))
-                                        Text(label, color = TextPrimary, style = MaterialTheme.typography.bodyMedium)
-                                        Spacer(Modifier.weight(1f))
-                                        Icon(
-                                            Icons.Outlined.Check,
-                                            contentDescription = null,
-                                            tint = Accent,
-                                            modifier =
-                                                Modifier
-                                                    .size(16.dp)
-                                                    .graphicsLayer {
-                                                        scaleX = checkScale
-                                                        scaleY = checkScale
-                                                        alpha = checkScale
-                                                    },
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(20.dp))
-                HorizontalDivider(color = TextSecondary.copy(alpha = 0.15f))
-                Spacer(Modifier.height(20.dp))
 
                 // ── Layouts ──
                 Text(

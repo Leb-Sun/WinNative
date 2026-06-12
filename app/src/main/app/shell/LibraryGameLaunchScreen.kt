@@ -46,8 +46,11 @@ import androidx.compose.material.icons.outlined.ArrowDropDown
 import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.Construction
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.AltRoute
+import androidx.compose.material.icons.outlined.RocketLaunch
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Save
@@ -132,11 +135,15 @@ internal fun LibraryGameLaunchScreen(
     showVerifyFiles: Boolean = true,
     showCheckForUpdate: Boolean = true,
     showWorkshop: Boolean = true,
+    // Nullable on purpose: null hides the menu item.
+    onLaunchOptions: (() -> Unit)? = null,
+    onBetaBranches: (() -> Unit)? = null,
     playEnabled: Boolean = true,
     playDisabledLabel: String? = null,
     onBack: () -> Unit,
     onPlay: () -> Unit,
     onSettings: () -> Unit,
+    onAchievements: (() -> Unit)? = null,
     onShortcut: () -> Unit,
     onCloudSaves: () -> Unit,
     onUninstall: () -> Unit,
@@ -272,6 +279,8 @@ internal fun LibraryGameLaunchScreen(
                 onVerifyFiles = onVerifyFiles,
                 onCheckForUpdate = onCheckForUpdate,
                 onWorkshop = onWorkshop,
+                onLaunchOptions = onLaunchOptions,
+                onBetaBranches = onBetaBranches,
             )
         }
 
@@ -383,6 +392,14 @@ internal fun LibraryGameLaunchScreen(
                             size = actionIconSize,
                             onClick = onSettings,
                         )
+                        if (onAchievements != null) {
+                            LaunchIconActionButton(
+                                icon = Icons.Outlined.EmojiEvents,
+                                contentDescription = stringResource(R.string.steam_achievements_title),
+                                size = actionIconSize,
+                                onClick = onAchievements,
+                            )
+                        }
                         LaunchIconActionButton(
                             icon = Icons.Outlined.Home,
                             contentDescription =
@@ -799,6 +816,9 @@ private fun SourceTag(
     onVerifyFiles: () -> Unit = {},
     onCheckForUpdate: () -> Unit = {},
     onWorkshop: () -> Unit = {},
+    // Nullable on purpose: null hides the menu item.
+    onLaunchOptions: (() -> Unit)? = null,
+    onBetaBranches: (() -> Unit)? = null,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var anchorHeightPx by remember { mutableStateOf(0) }
@@ -868,6 +888,20 @@ private fun SourceTag(
                         label = stringResource(R.string.store_game_workshop),
                         enabled = areSteamActionsEnabled,
                     ) { menuOpen = false; onWorkshop() }
+                }
+                if (onLaunchOptions != null) {
+                    LaunchSourceMenuItem(
+                        icon = Icons.Outlined.RocketLaunch,
+                        label = stringResource(R.string.store_game_launch_options),
+                        enabled = areSteamActionsEnabled,
+                    ) { menuOpen = false; onLaunchOptions() }
+                }
+                if (onBetaBranches != null) {
+                    LaunchSourceMenuItem(
+                        icon = Icons.Outlined.AltRoute,
+                        label = stringResource(R.string.store_game_beta_branch),
+                        enabled = areSteamActionsEnabled,
+                    ) { menuOpen = false; onBetaBranches() }
                 }
             }
         }
