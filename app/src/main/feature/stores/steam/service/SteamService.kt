@@ -94,6 +94,7 @@ import com.winlator.cmod.runtime.system.SessionKeepAliveService
 import com.winlator.cmod.shared.android.AppTerminationHelper
 import com.winlator.cmod.shared.ui.toast.WinToast
 import com.winlator.cmod.shared.android.NotificationHelper
+import com.winlator.cmod.shared.io.FileUtils
 import com.winlator.cmod.shared.io.StorageUtils
 import dagger.hilt.android.AndroidEntryPoint
 import com.winlator.cmod.feature.stores.steam.enums.EDepotFileFlag
@@ -2304,6 +2305,122 @@ class SteamService : Service() {
         ): String {
             val gameId = ContainerUtils.extractGameIdFromContainerId(appId)
             return container.executablePath.ifEmpty { getInstalledExe(gameId) }
+        }
+
+        private fun findSteamShortcut(
+            context: Context,
+            appId: Int,
+        ) = ContainerManager(context).loadShortcuts().find {
+            it.getExtra("game_source") == "STEAM" && it.getExtra("app_id") == appId.toString()
+        }
+
+        /**
+         * Lightweight read of the Steam shortcut's `[Extra Data]` section straight
+         * from its .desktop file, with the owning container's root dir. Deliberately
+         * NOT findSteamShortcut/loadShortcuts on read-only paths: the Shortcut
+         * constructor decodes cover-art bitmaps, runs PE icon extraction and can
+         * rewrite .desktop files — far too heavy (and write-racy) for hot paths
+         * that only need a couple of strings. Returns null when no Steam shortcut
+         * exists for [appId].
+         */
+        private fun readSteamShortcutExtras(
+            context: Context,
+            appId: Int,
+        ): Pair<Map<String, String>, File>? {
+            val appIdStr = appId.toString()
+            val homeDir = File(ImageFs.find(context).rootDir, "home")
+            val containerDirs =
+                homeDir.listFiles { f -> f.isDirectory && f.name.startsWith("${ImageFs.USER}-") }
+                    ?: return null
+            for (containerDir in containerDirs) {
+                val desktopDir = File(containerDir, ".wine/drive_c/users/${ImageFs.USER}/Desktop")
+                val files = desktopDir.listFiles { f -> f.name.endsWith(".desktop") } ?: continue
+                for (file in files) {
+                    var section = ""
+                    val extras = mutableMapOf<String, String>()
+                    // FileUtils.readLines (also used by Shortcut's parser) returns
+                    // what it could read on IO errors — one corrupt .desktop file
+                    // must not abort the scan of the remaining containers.
+                    for (raw in FileUtils.readLines(file)) {
+                        val line = raw.trim()
+                        if (line.isEmpty() || line.startsWith("#")) continue
+                        if (line.startsWith("[")) {
+                            section = line.substringAfter("[").substringBefore("]")
+                            continue
+                        }
+                        if (section != "Extra Data") continue
+                        val key = line.substringBefore("=", "")
+                        if (key.isNotEmpty()) extras[key] = line.substringAfter("=")
+                    }
+                    if (extras["game_source"] == "STEAM" && extras["app_id"] == appIdStr) {
+                        return extras to containerDir
+                    }
+                }
+            }
+            return null
+        }
+
+        /** Reads executablePath from a container's `.container` config without Container construction. */
+        private fun readContainerExecutablePath(containerDir: File): String =
+            runCatching {
+                val configFile = File(containerDir, ".container")
+                if (!configFile.isFile) return ""
+                JSONObject(configFile.readText()).optString("executablePath", "")
+            }.getOrElse { "" }
+
+        /**
+         * Persists the user's launch-option choice (an appinfo `config.launch` entry) on
+         * the game's shortcut + container, matching resolveRelativeGameExe's priority:
+         * shortcut `launch_exe_path` first, container.executablePath as the synced
+         * fallback. The option's own arguments go to `launch_exe_args`, kept separate
+         * from the user-editable custom args (`execArgs`). Call on an IO dispatcher.
+         */
+        fun setSelectedLaunchOption(
+            context: Context,
+            appId: Int,
+            executable: String,
+            arguments: String,
+        ): Boolean {
+            var shortcut = findSteamShortcut(context, appId)
+            if (shortcut == null) {
+                // Installs from older builds may predate shortcut creation on download.
+                createSteamShortcut(context, appId)
+                shortcut = findSteamShortcut(context, appId)
+            }
+            if (shortcut == null) {
+                Timber.w("setSelectedLaunchOption: no shortcut for appId=$appId")
+                return false
+            }
+            shortcut.putExtra("launch_exe_path", executable)
+            shortcut.putExtra("launch_exe_args", arguments.ifBlank { null })
+            shortcut.saveData()
+            shortcut.container?.let {
+                it.executablePath = executable
+                it.saveData()
+            }
+            return true
+        }
+
+        /**
+         * Currently effective launch option as (executable, arguments), resolved in the
+         * same order the launch path uses: shortcut `launch_exe_path` first, the owning
+         * container's executablePath as fallback, then the installed exe. Reads the
+         * .desktop/.container files directly (this runs on every game-detail open).
+         * Call on an IO dispatcher.
+         */
+        fun getSelectedLaunchOption(
+            context: Context,
+            appId: Int,
+        ): Pair<String, String> {
+            val found = runCatching { readSteamShortcutExtras(context, appId) }.getOrNull()
+            val extras = found?.first.orEmpty()
+            val exe =
+                extras["launch_exe_path"].orEmpty().ifBlank {
+                    found?.second?.let { readContainerExecutablePath(it) }.orEmpty().ifBlank {
+                        getInstalledExe(appId)
+                    }
+                }
+            return exe.replace('\\', '/') to extras["launch_exe_args"].orEmpty()
         }
 
         suspend fun deleteApp(appId: Int): Boolean =
@@ -7424,6 +7541,23 @@ class SteamService : Service() {
             }
             Timber.w("wn-steam-client app info unavailable for appId=$appId")
             return null
+        }
+
+        /**
+         * Best-effort re-fetch + persist of one app's PICS appinfo. Used to heal
+         * cached rows that predate newly parsed fields (e.g. LaunchInfo.arguments).
+         * Returns false when offline / fetch fails; callers keep using the cached row.
+         */
+        suspend fun refreshAppInfoFromPics(appId: Int): Boolean {
+            val fresh =
+                try {
+                    fetchLatestSteamAppInfo(appId)
+                } catch (e: Exception) {
+                    Timber.w(e, "refreshAppInfoFromPics failed for appId=$appId")
+                    null
+                } ?: return false
+            persistLatestSteamAppInfo(appId, fresh)
+            return true
         }
 
         private suspend fun persistLatestSteamAppInfo(

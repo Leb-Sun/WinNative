@@ -48,6 +48,7 @@ import androidx.compose.material.icons.outlined.Construction
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.RocketLaunch
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Save
@@ -132,6 +133,8 @@ internal fun LibraryGameLaunchScreen(
     showVerifyFiles: Boolean = true,
     showCheckForUpdate: Boolean = true,
     showWorkshop: Boolean = true,
+    showLaunchOptions: Boolean = false,
+    onLaunchOptions: () -> Unit = {},
     playEnabled: Boolean = true,
     playDisabledLabel: String? = null,
     onBack: () -> Unit,
@@ -268,10 +271,12 @@ internal fun LibraryGameLaunchScreen(
                 showVerifyFiles = showVerifyFiles,
                 showCheckForUpdate = showCheckForUpdate,
                 showWorkshop = showWorkshop,
+                showLaunchOptions = showLaunchOptions,
                 areSteamActionsEnabled = areSteamActionsEnabled,
                 onVerifyFiles = onVerifyFiles,
                 onCheckForUpdate = onCheckForUpdate,
                 onWorkshop = onWorkshop,
+                onLaunchOptions = onLaunchOptions,
             )
         }
 
@@ -795,10 +800,12 @@ private fun SourceTag(
     showVerifyFiles: Boolean = true,
     showCheckForUpdate: Boolean = true,
     showWorkshop: Boolean = true,
+    showLaunchOptions: Boolean = false,
     areSteamActionsEnabled: Boolean = true,
     onVerifyFiles: () -> Unit = {},
     onCheckForUpdate: () -> Unit = {},
     onWorkshop: () -> Unit = {},
+    onLaunchOptions: () -> Unit = {},
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var anchorHeightPx by remember { mutableStateOf(0) }
@@ -868,6 +875,13 @@ private fun SourceTag(
                         label = stringResource(R.string.store_game_workshop),
                         enabled = areSteamActionsEnabled,
                     ) { menuOpen = false; onWorkshop() }
+                }
+                if (showLaunchOptions) {
+                    LaunchSourceMenuItem(
+                        icon = Icons.Outlined.RocketLaunch,
+                        label = stringResource(R.string.store_game_launch_options),
+                        enabled = areSteamActionsEnabled,
+                    ) { menuOpen = false; onLaunchOptions() }
                 }
             }
         }
