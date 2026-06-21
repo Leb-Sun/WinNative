@@ -1178,14 +1178,15 @@ object SteamUtils {
             val dlcApps = SteamService.getDownloadableDlcAppsOf(appId)
             val hiddenDlcApps = SteamService.getHiddenDlcAppsOf(appId)
             val appendedDlcIds = mutableListOf<Int>()
+            val selectedBranch = SteamService.resolveSelectedBetaName(appId).ifBlank { "public" }
 
             val appIniContent =
                 buildString {
-                    // [app::general] — make Steam_Apps::GetCurrentBetaName()
-                    // deterministic; WinNative always installs the public branch.
+                    // [app::general] — communicate the active branch to gbe_fork so
+                    // GetCurrentBetaName() and GetAppBuildId() return correct values.
                     appendLine("[app::general]")
-                    appendLine("is_beta_branch=0")
-                    appendLine("branch_name=public")
+                    appendLine("is_beta_branch=${if (selectedBranch.equals("public", ignoreCase = true)) 0 else 1}")
+                    appendLine("branch_name=$selectedBranch")
                     appendLine()
                     appendLine("[app::dlcs]")
                     appendLine("unlock_all=0")
@@ -1399,15 +1400,39 @@ object SteamUtils {
         }
     }
 
+    /**
+     * Combines a launch option's own arguments (appinfo `config.launch` entry, persisted
+     * as the shortcut's `launch_exe_args` extra) with the user's custom args. Honors
+     * Steam's `%command%` placeholder in the custom args: the option args stay attached
+     * to the command itself so a user wrapper like `FOO=1 %command% -windowed` keeps
+     * working.
+     */
+    @JvmStatic
+    fun combineSteamLaunchArgs(
+        selectedArgs: String?,
+        customArgs: String?,
+    ): String {
+        val selected = selectedArgs.orEmpty().trim()
+        val custom = customArgs.orEmpty().trim()
+        if (selected.isEmpty()) return custom
+        if (custom.isEmpty()) return selected
+        return if (custom.contains("%command%")) {
+            custom.replace("%command%", "%command% $selected")
+        } else {
+            "$selected $custom"
+        }
+    }
+
     @JvmStatic
     fun updateOrModifyLocalConfig(
         imageFs: ImageFs,
         container: Container,
         appId: String,
         steamUserId64: String,
+        selectedLaunchArgs: String = "",
     ) {
         try {
-            val exeCommandLine = container.execArgs
+            val exeCommandLine = combineSteamLaunchArgs(selectedLaunchArgs, container.execArgs)
 
             com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient
                 .setLaunchCommandLine(exeCommandLine)

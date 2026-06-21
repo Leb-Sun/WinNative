@@ -92,9 +92,10 @@ import com.winlator.cmod.runtime.display.environment.ImageFs
 import com.winlator.cmod.runtime.system.GPUInformation
 import com.winlator.cmod.runtime.system.SessionKeepAliveService
 import com.winlator.cmod.shared.android.AppTerminationHelper
-import com.winlator.cmod.shared.ui.toast.WinToast
 import com.winlator.cmod.shared.android.NotificationHelper
+import com.winlator.cmod.shared.io.FileUtils
 import com.winlator.cmod.shared.io.StorageUtils
+import com.winlator.cmod.shared.ui.toast.WinToast
 import dagger.hilt.android.AndroidEntryPoint
 import com.winlator.cmod.feature.stores.steam.enums.EDepotFileFlag
 import com.winlator.cmod.feature.stores.steam.enums.ELicenseFlags
@@ -2306,6 +2307,158 @@ class SteamService : Service() {
             return container.executablePath.ifEmpty { getInstalledExe(gameId) }
         }
 
+        private fun findSteamShortcut(
+            context: Context,
+            appId: Int,
+        ) = ContainerManager(context).loadShortcuts().find {
+            it.getExtra("game_source") == "STEAM" && it.getExtra("app_id") == appId.toString()
+        }
+
+        /**
+         * Lightweight read of the Steam shortcut's `[Extra Data]` section straight
+         * from its .desktop file, with the owning container's root dir. Deliberately
+         * NOT findSteamShortcut/loadShortcuts on read-only paths: the Shortcut
+         * constructor decodes cover-art bitmaps, runs PE icon extraction and can
+         * rewrite .desktop files — far too heavy (and write-racy) for hot paths
+         * that only need a couple of strings. Returns null when no Steam shortcut
+         * exists for [appId].
+         */
+        private fun readSteamShortcutExtras(
+            context: Context,
+            appId: Int,
+        ): Pair<Map<String, String>, File>? {
+            val appIdStr = appId.toString()
+            val homeDir = File(ImageFs.find(context).rootDir, "home")
+            val containerDirs =
+                homeDir.listFiles { f -> f.isDirectory && f.name.startsWith("${ImageFs.USER}-") }
+                    ?: return null
+            for (containerDir in containerDirs) {
+                val desktopDir = File(containerDir, ".wine/drive_c/users/${ImageFs.USER}/Desktop")
+                val files = desktopDir.listFiles { f -> f.name.endsWith(".desktop") } ?: continue
+                for (file in files) {
+                    var section = ""
+                    val extras = mutableMapOf<String, String>()
+                    // FileUtils.readLines (also used by Shortcut's parser) returns
+                    // what it could read on IO errors — one corrupt .desktop file
+                    // must not abort the scan of the remaining containers.
+                    for (raw in FileUtils.readLines(file)) {
+                        val line = raw.trim()
+                        if (line.isEmpty() || line.startsWith("#")) continue
+                        if (line.startsWith("[")) {
+                            section = line.substringAfter("[").substringBefore("]")
+                            continue
+                        }
+                        if (section != "Extra Data") continue
+                        val key = line.substringBefore("=", "")
+                        if (key.isNotEmpty()) extras[key] = line.substringAfter("=")
+                    }
+                    if (extras["game_source"] == "STEAM" && extras["app_id"] == appIdStr) {
+                        return extras to containerDir
+                    }
+                }
+            }
+            return null
+        }
+
+        /** Reads executablePath from a container's `.container` config without Container construction. */
+        private fun readContainerExecutablePath(containerDir: File): String =
+            runCatching {
+                val configFile = File(containerDir, ".container")
+                if (!configFile.isFile) return ""
+                JSONObject(configFile.readText()).optString("executablePath", "")
+            }.getOrElse { "" }
+
+        /**
+         * Persists the user's launch-option choice (an appinfo `config.launch` entry) on
+         * the game's shortcut + container, matching resolveRelativeGameExe's priority:
+         * shortcut `launch_exe_path` first, container.executablePath as the synced
+         * fallback. The option's own arguments go to `launch_exe_args`, kept separate
+         * from the user-editable custom args (`execArgs`). Call on an IO dispatcher.
+         */
+        fun setSelectedLaunchOption(
+            context: Context,
+            appId: Int,
+            executable: String,
+            arguments: String,
+        ): Boolean {
+            var shortcut = findSteamShortcut(context, appId)
+            if (shortcut == null) {
+                // Installs from older builds may predate shortcut creation on download.
+                createSteamShortcut(context, appId)
+                shortcut = findSteamShortcut(context, appId)
+            }
+            if (shortcut == null) {
+                Timber.w("setSelectedLaunchOption: no shortcut for appId=$appId")
+                return false
+            }
+            shortcut.putExtra("launch_exe_path", executable)
+            shortcut.putExtra("launch_exe_args", arguments.ifBlank { null })
+            shortcut.saveData()
+            shortcut.container?.let {
+                it.executablePath = executable
+                it.saveData()
+            }
+            return true
+        }
+
+        /**
+         * Currently effective launch option as (executable, arguments), resolved in the
+         * same order the launch path uses: shortcut `launch_exe_path` first, the owning
+         * container's executablePath as fallback, then the installed exe. Reads the
+         * .desktop/.container files directly (this runs on every game-detail open).
+         * Call on an IO dispatcher.
+         */
+        fun getSelectedLaunchOption(
+            context: Context,
+            appId: Int,
+        ): Pair<String, String> {
+            val found = runCatching { readSteamShortcutExtras(context, appId) }.getOrNull()
+            val extras = found?.first.orEmpty()
+            val exe =
+                extras["launch_exe_path"].orEmpty().ifBlank {
+                    found?.second?.let { readContainerExecutablePath(it) }.orEmpty().ifBlank {
+                        getInstalledExe(appId)
+                    }
+                }
+            return exe.replace('\\', '/') to extras["launch_exe_args"].orEmpty()
+        }
+
+        /**
+         * Persists the user's beta-branch choice on the game's shortcut.
+         * Pass a blank [branchName] to clear the selection (reverts to public).
+         * Call on an IO dispatcher.
+         */
+        fun setSelectedBetaBranch(
+            context: Context,
+            appId: Int,
+            branchName: String,
+            recordPrevious: Boolean = true,
+        ): Boolean {
+            var shortcut = findSteamShortcut(context, appId)
+            if (shortcut == null) {
+                createSteamShortcut(context, appId)
+                shortcut = findSteamShortcut(context, appId)
+            }
+            if (shortcut == null) {
+                Timber.w("setSelectedBetaBranch: no shortcut for appId=$appId")
+                return false
+            }
+            // Remember the branch being replaced ("public" when blank) so a
+            // cancelled switch can restore the last committed selection. Only
+            // the first un-committed switch is recorded — re-picks before a
+            // download lands must not overwrite the true last-known-good.
+            if (recordPrevious) {
+                val current = shortcut.getExtra("selectedBranch").orEmpty().trim()
+                val previous = shortcut.getExtra("previousBranch").orEmpty().trim()
+                if (previous.isEmpty() && !current.equals(branchName.trim(), ignoreCase = true)) {
+                    shortcut.putExtra("previousBranch", current.ifBlank { "public" })
+                }
+            }
+            shortcut.putExtra("selectedBranch", branchName.ifBlank { null })
+            shortcut.saveData()
+            return true
+        }
+
         suspend fun deleteApp(appId: Int): Boolean =
             withContext(Dispatchers.IO) {
                 val appDirPath = getAppDirPath(appId)
@@ -2508,7 +2661,7 @@ class SteamService : Service() {
                 targetDepotIds = targetDepotIds.toSet().takeIf { it.isNotEmpty() },
             )
 
-        fun downloadAppForVerify(appId: Int): DownloadInfo? =
+        fun downloadAppForVerify(appId: Int, isRestore: Boolean = false): DownloadInfo? =
             downloadApp(
                 appId,
                 resolveInstalledDlcIdsForUpdateOrVerify(appId),
@@ -2516,7 +2669,7 @@ class SteamService : Service() {
                 enableVerify = true,
                 allowPersistedProgress = false,
                 downloadTaskType = DownloadRecord.TASK_VERIFY,
-            )
+            )?.also { it.isRepair = isRestore }
 
         private fun resolveInstalledDlcIdsForUpdateOrVerify(appId: Int): List<Int> {
             val dlcAppIds = getInstalledDlcDepotsOf(appId).orEmpty().toMutableList()
@@ -2633,7 +2786,7 @@ class SteamService : Service() {
                 appId = appId,
                 downloadableDepots = downloadableDepots,
                 userSelectedDlcAppIds = effectiveDlcAppIds,
-                branch = "public",
+                branch = resolveSelectedBetaName(appId).ifBlank { "public" },
                 includeInstalledDepots = includeInstalledDepots,
                 enableVerify = enableVerify,
                 allowPersistedProgress = allowPersistedProgress,
@@ -4458,6 +4611,19 @@ class SteamService : Service() {
                     runCatching { MarkerUtils.removeMarker(appDirPath, Marker.STEAM_DRM_PATCHED) }
                     runCatching { MarkerUtils.removeMarker(appDirPath, Marker.STEAM_DRM_UNPACK_CHECKED) }
 
+                    pruneStaleDepotManifestCache(appDirPath)
+
+                    // A committed download makes the current selection the new
+                    // last-known-good — drop the cancelled-switch restore point.
+                    instance?.let { svc ->
+                        clearPreviousBetaBranch(svc, downloadInfo.gameId)
+                    }
+                    // Record the installed branch durably so a never-launched
+                    // install (whose build may no longer match any branch's
+                    // current PICS manifest) can still be recovered after a
+                    // WinNative reinstall. Launch later rewrites this file in full.
+                    persistInstalledBranchName(downloadInfo.gameId, appDirPath)
+
                     // Same reason as the runCatching above: a Room exception
                     // here used to FAIL a fully-downloaded game with COMPLETE
                     // marker already on disk.
@@ -5354,7 +5520,7 @@ class SteamService : Service() {
         suspend fun prepareLibSteamClientForLaunch(appId: Int) {
             if (appId <= 0) return
             startOverlayPollLoop()
-            val selectedBranch = resolveSelectedBetaName(appId)
+            val selectedBranch = recoverSelectedBetaName(appId)
             val baseStatePrimed =
                 runCatching { primeLibSteamClientLaunchState(appId, selectedBranch) }
                     .getOrElse { e ->
@@ -5443,14 +5609,128 @@ class SteamService : Service() {
             if (appId <= 0) return ""
             val svc = instance ?: return ""
             return runCatching {
-                for (sc in ContainerManager(svc).loadShortcuts()) {
-                    val scAppId = sc.getExtra("app_id").toIntOrNull() ?: continue
-                    if (scAppId != appId) continue
-                    val branch = sc.getExtra("selectedBranch").trim()
-                    if (branch.isNotEmpty()) return@runCatching branch
-                }
-                ""
+                readSteamShortcutExtras(svc, appId)?.first?.get("selectedBranch").orEmpty().trim()
             }.getOrElse { "" }
+        }
+
+        /**
+         * Like [resolveSelectedBetaName], but when the shortcut record is gone
+         * (reinstalling WinNative wipes app-private shortcuts while game files
+         * on external storage survive) it recovers the branch the installed
+         * build is actually on and heals the shortcut. Steam persists the beta
+         * key with the install (appmanifest ACF UserConfig/betakey); our durable
+         * analogs in the surviving game dir are, in order of trust:
+         *  1. `.DepotDownloader/depot.config` — the installed manifest gids,
+         *     matched exactly against each beta's current PICS manifests
+         *     (evidence of what the FILES are);
+         *  2. `steam_settings/configs.app.ini` `branch_name` — the selection
+         *     recorded at the game's last launch.
+         * Returns "" (public) when neither source identifies a beta — e.g. the
+         * installed build predates the current PICS manifests and the game was
+         * never launched. Call on an IO dispatcher.
+         */
+        // Apps whose branch recovery already ran this process — recovery can only
+        // succeed right after a WinNative reinstall, so one failed attempt per
+        // process is enough (a success heals the shortcut and short-circuits
+        // every later call through the persisted fast path above).
+        private val betaRecoveryAttemptedApps =
+            java.util.Collections.synchronizedSet(mutableSetOf<Int>())
+
+        suspend fun recoverSelectedBetaName(appId: Int): String {
+            val persisted = resolveSelectedBetaName(appId)
+            if (persisted.isNotEmpty()) return persisted
+            if (!betaRecoveryAttemptedApps.add(appId)) return ""
+            val svc = instance ?: return ""
+            return runCatching {
+                if (!isAppInstalled(appId)) return@runCatching ""
+                val app = withContext(Dispatchers.IO) { svc.appDao.findApp(appId) } ?: return@runCatching ""
+                val betaNames = app.branches.keys.filterNot { it.equals("public", ignoreCase = true) }
+                if (betaNames.isEmpty()) return@runCatching ""
+
+                val appDirPath = getAppDirPath(appId)
+                val inferred =
+                    inferBranchFromInstalledManifests(app, betaNames, appDirPath)
+                        ?: readBranchNameFromSettingsIni(app, appDirPath)
+                            // Canonicalize to the PICS branches-map key: downstream
+                            // buildId lookups (app.branches[name]) are exact-key.
+                            ?.let { name -> betaNames.firstOrNull { it.equals(name, ignoreCase = true) } }
+                if (inferred.isNullOrEmpty()) return@runCatching ""
+                if (setSelectedBetaBranch(svc, appId, inferred, recordPrevious = false)) {
+                    Timber.i("Recovered beta branch '$inferred' for appId=$appId from the installed game dir")
+                }
+                inferred
+            }.getOrElse { e ->
+                Timber.w(e, "Beta branch recovery failed for appId=$appId")
+                ""
+            }
+        }
+
+        /**
+         * The beta whose current PICS manifests exactly match the installed
+         * manifest gids — every installed depot that declares a manifest for the
+         * branch must match, and at least one gid must differ from public (else
+         * the install is indistinguishable from public and stays public).
+         * Null when no or several betas qualify.
+         */
+        private fun inferBranchFromInstalledManifests(
+            app: SteamApp,
+            betaNames: List<String>,
+            appDirPath: String,
+        ): String? {
+            val installed = readInstalledDepotManifestIds(appDirPath)
+            if (installed.isEmpty()) return null
+            val matches =
+                betaNames.filter { branch ->
+                    var distinctFromPublic = false
+                    var comparedAny = false
+                    for ((depotId, installedGid) in installed) {
+                        val depot = app.depots[depotId] ?: continue
+                        val branchGid =
+                            (depot.manifests[branch] ?: depot.encryptedManifests[branch])?.gid ?: continue
+                        comparedAny = true
+                        if (branchGid != installedGid) return@filter false
+                        val publicGid =
+                            (depot.manifests["public"] ?: depot.encryptedManifests["public"])?.gid
+                        if (publicGid != branchGid) distinctFromPublic = true
+                    }
+                    comparedAny && distinctFromPublic
+                }
+            return matches.singleOrNull()
+        }
+
+        /**
+         * `branch_name` from the surviving `steam_settings/configs.app.ini`
+         * (written at every launch by writeCompleteSettingsDir). Checked at the
+         * game-dir root and next to the game exe — the two places the launch
+         * path writes settings dirs.
+         */
+        private fun readBranchNameFromSettingsIni(
+            app: SteamApp,
+            appDirPath: String,
+        ): String? {
+            val exeDir =
+                app.config.launch
+                    .firstOrNull { it.executable.endsWith(".exe") }
+                    ?.executable
+                    ?.replace('\\', '/')
+                    ?.substringBeforeLast('/', "")
+                    .orEmpty()
+            val candidates =
+                listOfNotNull(
+                    File(appDirPath, "steam_settings/configs.app.ini"),
+                    exeDir.takeIf { it.isNotEmpty() }?.let { File(appDirPath, "$it/steam_settings/configs.app.ini") },
+                )
+            for (ini in candidates) {
+                if (!ini.isFile) continue
+                val name =
+                    FileUtils.readLines(ini)
+                        .firstOrNull { it.startsWith("branch_name=") }
+                        ?.substringAfter("=")
+                        ?.trim()
+                        .orEmpty()
+                if (name.isNotEmpty() && !name.equals("public", ignoreCase = true)) return name
+            }
+            return null
         }
 
         suspend fun refreshEncryptedAppTicketForLibSteamClient(appId: Int): Boolean {
@@ -7311,14 +7591,19 @@ class SteamService : Service() {
 
         suspend fun isUpdatePending(
             appId: Int,
-            branch: String = "public",
+            branch: String? = null,
         ): Boolean = checkForAppUpdate(appId, branch).hasUpdate
 
         suspend fun checkForAppUpdate(
             appId: Int,
-            branch: String = "public",
+            // null = the game's selected beta, recovering a selection lost to an
+            // app reinstall — otherwise a reinstalled beta install would be
+            // diffed against public and silently downgraded by the update.
+            requestedBranch: String? = null,
         ): SteamUpdateInfo =
             withContext(Dispatchers.IO) {
+                val branch = requestedBranch ?: recoverSelectedBetaName(appId).ifBlank { "public" }
+
                 fun SteamUpdateInfo.logged(): SteamUpdateInfo {
                     Timber.i(
                         "Steam update check result: appId=$appId branch=$branch " +
@@ -7352,6 +7637,8 @@ class SteamService : Service() {
                 }
 
                 val installedManifestIds = readInstalledDepotManifestIds(appDirPath)
+                val hasDepotConfig =
+                    File(File(appDirPath, ".DepotDownloader"), "depot.config").exists()
                 val cachedManifestFiles: Set<String> =
                     File(appDirPath, ".DepotDownloader").list()?.toHashSet() ?: emptySet()
                 // Resolve manifests once per depot; the filter below decides which need updating,
@@ -7367,7 +7654,16 @@ class SteamService : Service() {
                         val installedManifestId = installedManifestIds[depotId]
                         if (installedManifestId != null) {
                             installedManifestId != manifest.gid
+                        } else if (hasDepotConfig) {
+                            // depot.config exists but doesn't list this depot: it
+                            // isn't cleanly installed (e.g. a cancelled switch left
+                            // the entry dropped/invalid). Treat as needs-download
+                            // rather than trusting a stale cached manifest, which
+                            // would falsely report "no updates".
+                            true
                         } else {
+                            // True legacy install with no depot.config — the cached
+                            // manifest is the only installed-version signal.
                             "${depotId}_${manifest.gid}.manifest" !in cachedManifestFiles
                         }
                     }
@@ -7426,6 +7722,23 @@ class SteamService : Service() {
             return null
         }
 
+        /**
+         * Best-effort re-fetch + persist of one app's PICS appinfo. Used to heal
+         * cached rows that predate newly parsed fields (e.g. LaunchInfo.arguments).
+         * Returns false when offline / fetch fails; callers keep using the cached row.
+         */
+        suspend fun refreshAppInfoFromPics(appId: Int): Boolean {
+            val fresh =
+                try {
+                    fetchLatestSteamAppInfo(appId)
+                } catch (e: Exception) {
+                    Timber.w(e, "refreshAppInfoFromPics failed for appId=$appId")
+                    null
+                } ?: return false
+            persistLatestSteamAppInfo(appId, fresh)
+            return true
+        }
+
         private suspend fun persistLatestSteamAppInfo(
             appId: Int,
             remoteSteamApp: SteamApp,
@@ -7470,42 +7783,189 @@ class SteamService : Service() {
                 emptyMap()
             }
 
+        /**
+         * Prunes stale "{depotId}_{gid}.manifest" caches after a completed
+         * download: a branch switch or ordinary update leaves the previous
+         * build's manifests behind, wasting disk and — when depot.config is
+         * missing an entry — letting checkForAppUpdate's cache fallback mistake
+         * an old build for installed. Keeps only what depot.config says is
+         * current; legacy installs with no depot.config are left untouched
+         * because their fallback needs the cached files. Manifests with a
+         * pending ".stalecleanup" marker are also kept — the native stale-file
+         * pass still needs them to diff the old build's files away. ".filelist"
+         * sidecars (decrypted file lists the native pass reads without depot
+         * keys) follow the same lifecycle as their manifests.
+         */
+        private fun pruneStaleDepotManifestCache(appDirPath: String) {
+            runCatching {
+                val installedManifests = readInstalledDepotManifestIds(appDirPath)
+                if (installedManifests.isEmpty()) return
+                val depotDownloaderDir = File(appDirPath, ".DepotDownloader")
+                depotDownloaderDir
+                    .listFiles { f ->
+                        f.isFile && (f.name.endsWith(".manifest") || f.name.endsWith(".filelist"))
+                    }
+                    ?.forEach { f ->
+                        val stem = f.name.substringBeforeLast('.')
+                        val parts = stem.split('_')
+                        if (parts.size != 2) return@forEach
+                        val depotId = parts[0].toIntOrNull() ?: return@forEach
+                        val gid = parts[1].toLongOrNull() ?: return@forEach
+                        if (installedManifests[depotId] == gid) return@forEach
+                        if (File(depotDownloaderDir, "$stem.stalecleanup").isFile) return@forEach
+                        if (f.delete()) {
+                            Timber.i("Pruned stale depot manifest cache ${f.name} at $appDirPath")
+                        }
+                    }
+                // Markers with neither a manifest nor a filelist left can
+                // never be acted on.
+                depotDownloaderDir
+                    .listFiles { f -> f.isFile && f.name.endsWith(".stalecleanup") }
+                    ?.forEach { f ->
+                        val stem = f.name.removeSuffix(".stalecleanup")
+                        val actionable =
+                            File(depotDownloaderDir, "$stem.manifest").isFile ||
+                                File(depotDownloaderDir, "$stem.filelist").isFile
+                        if (!actionable && f.delete()) {
+                            Timber.i("Dropped orphaned stale-cleanup marker ${f.name} at $appDirPath")
+                        }
+                    }
+            }.onFailure { e -> Timber.w(e, "Stale manifest prune failed for $appDirPath") }
+        }
+
+        // The depot writer patches files in place (it never populates a
+        // .DepotDownloader/staging area), so a cancelled update can only clear
+        // the transient markers/progress here — the on-disk build is repaired by
+        // the restore verify, not by restoring staged originals.
         private fun cleanupCancelledUpdate(appDirPath: String) {
             MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
             MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
             clearPersistedProgressSnapshot(appDirPath)
+        }
 
-            val stagingDir = File(File(appDirPath, ".DepotDownloader"), "staging")
-            if (!stagingDir.exists()) return
+        /**
+         * A cancelled branch-switch update leaves selectedBranch pointing at a
+         * build that never landed and a half-old/half-new mix on disk. Restore
+         * the last committed selection (the "previousBranch" extra recorded when
+         * the picker changed it) and — when the cancelled download had already
+         * touched files — run the repair verify: it resolves the now-restored
+         * branch at download time and rewrites mismatched chunks, after which
+         * the native stale-file pass reclaims files unique to the aborted build.
+         *
+         * `previousBranch` is kept until the repair *completes*
+         * ([completeAppDownload] clears it), so it doubles as the durable
+         * "restore in progress" signal that labels the download and guards its
+         * cancel. No-op for updates that weren't a branch switch.
+         */
+        private fun restoreCommittedBranchAfterCancelledUpdate(
+            appId: Int,
+            filesTouched: Boolean,
+        ) {
+            val svc = instance ?: return
+            runCatching {
+                val previous =
+                    readSteamShortcutExtras(svc, appId)?.first?.get("previousBranch").orEmpty().trim()
+                if (previous.isEmpty()) return
+                // Store the restored branch verbatim — including "public" — so the
+                // selector and update detection read it authoritatively. Converting
+                // public to a blank extra would make recoverSelectedBetaName infer
+                // the branch from the (still-mixed) installed files and mislabel it.
+                if (!setSelectedBetaBranch(svc, appId, previous, recordPrevious = false)) return
 
-            stagingDir
-                .walkBottomUp()
-                .forEach { staged ->
-                    if (staged == stagingDir) return@forEach
-                    if (staged.isDirectory) {
-                        if (staged.list().isNullOrEmpty()) staged.delete()
-                        return@forEach
-                    }
-
-                    val relative = staged.relativeTo(stagingDir)
-                    val finalFile = File(appDirPath, relative.path)
-                    runCatching {
-                        finalFile.parentFile?.mkdirs()
-                        if (finalFile.exists()) {
-                            finalFile.delete()
-                        }
-                        if (!staged.renameTo(finalFile)) {
-                            staged.copyTo(finalFile, overwrite = true)
-                            staged.delete()
-                        }
-                    }.onFailure {
-                        Timber.w(it, "Failed to restore staged Steam update file ${staged.absolutePath}")
-                    }
+                if (!filesTouched) {
+                    // Nothing was written; the committed build is intact. Drop the
+                    // restore point and we're done — no repair needed.
+                    clearPreviousBetaBranch(svc, appId)
+                    Timber.i("Cancelled update for appId=$appId (nothing written): restored branch '$previous'")
+                    return
                 }
 
-            if (stagingDir.exists() && stagingDir.list().isNullOrEmpty()) {
-                stagingDir.delete()
+                // Files were touched. Keep previousBranch as the restore-in-progress
+                // signal until the repair completes (the fresh verify rebuilds the
+                // depot.config entries the cancelled switch left in-progress).
+                Timber.i("Cancelled switch for appId=$appId: restoring branch '$previous', verifying files")
+                WinToast.show(
+                    svc.applicationContext,
+                    svc.getString(R.string.store_game_beta_branch_restoring, previous),
+                    Toast.LENGTH_LONG,
+                )
+                if (downloadAppForVerify(appId, isRestore = true) == null) {
+                    // Dispatch failed before a coordinator record was created (nothing
+                    // will retry it). Don't leave previousBranch dangling — it would
+                    // later restore the wrong branch — give up cleanly to not-installed.
+                    Timber.w("Restore verify dispatch returned null for appId=$appId; abandoning restore")
+                    abandonInProgressRestore(appId, getAppDirPath(appId))
+                }
+            }.onFailure { e ->
+                Timber.w(e, "Beta branch restore after cancelled update failed for appId=$appId")
             }
+        }
+
+        /**
+         * The user cancelled an in-progress restore verify. They accepted (via the
+         * cancel-warning dialog) that the half-repaired install must be
+         * re-downloaded from the store, so converge to a clean not-installed state
+         * without deleting files (a re-download reuses/repairs them): mark
+         * not-installed and drop the restore point. A re-download's fresh pass
+         * rebuilds any depot.config entries the cancelled switch left in-progress.
+         */
+        private fun abandonInProgressRestore(appId: Int, appDirPath: String) {
+            instance?.let { clearPreviousBetaBranch(it, appId) }
+            MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
+            MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
+            Timber.i("Restore verify abandoned for appId=$appId; marked not-installed, files left for re-download")
+        }
+
+        private fun hasPreviousBetaBranch(appId: Int): Boolean {
+            val svc = instance ?: return false
+            return runCatching {
+                !readSteamShortcutExtras(svc, appId)?.first?.get("previousBranch").isNullOrBlank()
+            }.getOrDefault(false)
+        }
+
+        private fun clearPreviousBetaBranch(context: Context, appId: Int) {
+            runCatching {
+                val shortcut = findSteamShortcut(context, appId) ?: return
+                if (!shortcut.getExtra("previousBranch").isNullOrEmpty()) {
+                    shortcut.putExtra("previousBranch", null)
+                    shortcut.saveData()
+                }
+            }.onFailure { e -> Timber.w(e, "Failed to clear previousBranch for appId=$appId") }
+        }
+
+        /**
+         * Records the installed branch in `steam_settings/configs.app.ini` at
+         * download completion so a never-launched install (whose build may no
+         * longer match any branch's current PICS manifest) is still recoverable
+         * after a WinNative reinstall. Merges into an existing file (launch later
+         * rewrites it in full) or creates a minimal one.
+         */
+        private fun persistInstalledBranchName(appId: Int, appDirPath: String) {
+            runCatching {
+                val branch = resolveSelectedBetaName(appId).ifBlank { "public" }
+                val ini = File(appDirPath, "steam_settings/configs.app.ini")
+                ini.parentFile?.mkdirs()
+                if (ini.isFile) {
+                    val lines = ini.readLines().toMutableList()
+                    val idx = lines.indexOfFirst { it.trimStart().startsWith("branch_name=") }
+                    if (idx >= 0) {
+                        lines[idx] = "branch_name=$branch"
+                    } else {
+                        val genIdx =
+                            lines.indexOfFirst { it.trim().equals("[app::general]", ignoreCase = true) }
+                        if (genIdx >= 0) {
+                            lines.add(genIdx + 1, "branch_name=$branch")
+                        } else {
+                            lines.add("[app::general]")
+                            lines.add("branch_name=$branch")
+                        }
+                    }
+                    ini.writeText(lines.joinToString("\n", postfix = "\n"))
+                } else {
+                    ini.writeText("[app::general]\nbranch_name=$branch\n")
+                }
+                Timber.i("Persisted installed branch_name='$branch' for appId=$appId")
+            }.onFailure { e -> Timber.w(e, "Failed to persist installed branch_name for appId=$appId") }
         }
 
         suspend fun checkDlcOwnershipViaPICSBatch(dlcAppIds: Set<Int>): Set<Int> {
@@ -7584,7 +8044,10 @@ class SteamService : Service() {
                 if (record.taskType == DownloadRecord.TASK_UPDATE) {
                     downloadAppForUpdate(appId, persistedIds)
                 } else if (record.taskType == DownloadRecord.TASK_VERIFY) {
-                    downloadAppForVerify(appId)
+                    // A pending previousBranch extra means this verify is the
+                    // restore of a cancelled switch — keep it labelled across a
+                    // requeue / app restart.
+                    downloadAppForVerify(appId, isRestore = hasPreviousBetaBranch(appId))
                 } else {
                     downloadApp(appId, persistedIds)
                 }
@@ -7615,10 +8078,20 @@ class SteamService : Service() {
                     info.cancel("Cancelled by user")
                 }
                 kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-                    val isUpdateTask = record.taskType == DownloadRecord.TASK_UPDATE
+                    // VERIFY only exists for installed games: a cancelled one
+                    // must clean up like an update, never fall through to the
+                    // install-cancel branch that deletes the game directory.
+                    val isUpdateTask =
+                        record.taskType == DownloadRecord.TASK_UPDATE ||
+                            record.taskType == DownloadRecord.TASK_VERIFY
                     info?.awaitCompletion(timeoutMs = if (isUpdateTask) 10000L else 3000L)
                     val appDirPath = record.installPath.ifEmpty { getAppDirPath(appId) }
                     if (isUpdateTask) {
+                        val isVerify = record.taskType == DownloadRecord.TASK_VERIFY
+                        // A restore verify is durably identified by the pending
+                        // previousBranch extra (set on the cancelled switch, cleared
+                        // only when a download completes).
+                        val isRestoreVerify = isVerify && hasPreviousBetaBranch(appId)
                         val updateNeverStarted =
                             statusAtCancel == DownloadPhase.QUEUED ||
                                 (
@@ -7639,6 +8112,25 @@ class SteamService : Service() {
                         }
                         info?.updateStatus(DownloadPhase.CANCELLED)
                         removeDownloadJob(appId, forceRemove = true)
+                        when {
+                            isRestoreVerify ->
+                                // User aborted the restore — converge to not-installed.
+                                abandonInProgressRestore(appId, appDirPath)
+                            isVerify -> {
+                                // Normal verify of an installed game: keep it installed.
+                                // (depot.config entries the cancelled verify left
+                                // in-progress are rebuilt by the next verify/update.)
+                                if (!updateNeverStarted) {
+                                    MarkerUtils.addMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)
+                                }
+                            }
+                            else ->
+                                // UPDATE cancel: revert the branch and repair if files changed.
+                                restoreCommittedBranchAfterCancelledUpdate(
+                                    appId,
+                                    filesTouched = !updateNeverStarted,
+                                )
+                        }
                         return@launch
                     }
                     val dirFile = java.io.File(appDirPath)

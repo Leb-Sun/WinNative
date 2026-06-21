@@ -1,5 +1,9 @@
 use crate::cdn_client::{CdnClient, CdnManifestResult};
 use crate::content_manifest::ContentManifest;
+use crate::depot_cleanup::{
+    backfill_filelist_sidecar, record_aborted_build, record_pending_cleanup,
+    run_stale_file_cleanup, write_filelist_sidecar,
+};
 use crate::depot_config::{DepotConfigStore, DepotProgressStore, INVALID_MANIFEST_ID};
 use crate::depot_writer::{write_depot_sequential, DepotWriteOptions};
 use crate::pb::ccontentserverdirectory::CContentServerDirectoryServerInfo;
@@ -316,7 +320,18 @@ pub fn download_resolved_depots_with_cancel_progress(
 
     let mut cfg = DepotConfigStore::load(&config_dir);
     if fresh {
-        cfg.discard();
+        for depot in depots {
+            record_pending_cleanup(
+                &config_dir,
+                depot.depot_id,
+                cfg.installed_manifest(depot.depot_id),
+                depot.manifest_id,
+            );
+        }
+        // Per-depot, not discard(): wiping the whole store would hide other
+        // batches' depots from depot.config consumers (stale-file keep-union,
+        // update checks) for the rest of this app's install.
+        cfg.discard_depots(depots.iter().map(|depot| depot.depot_id));
         for depot in depots {
             DepotProgressStore::remove(&config_dir, depot.depot_id, depot.manifest_id);
             remove_clean_pause_marker(&config_dir, depot.depot_id, depot.manifest_id);
@@ -341,6 +356,9 @@ pub fn download_resolved_depots_with_cancel_progress(
         let clean_pause = has_clean_pause_marker(&config_dir, depot.depot_id, depot.manifest_id);
         if decide_depot_resume(fresh, &cfg, spec, clean_pause) == DepotResumeDecision::SkipInstalled
         {
+            // Installs that predate filelist sidecars get one written now so
+            // the stale-file keep-union can read this depot without its key.
+            backfill_filelist_sidecar(&config_dir, depot);
             result.depots_skipped += 1;
             continue;
         }
@@ -350,6 +368,12 @@ pub fn download_resolved_depots_with_cancel_progress(
                 depot.depot_id
             ));
         }
+        record_pending_cleanup(
+            &config_dir,
+            depot.depot_id,
+            cfg.installed_manifest(depot.depot_id),
+            depot.manifest_id,
+        );
         if !cfg.begin_depot(depot.depot_id) {
             return DepotDownloadResult::fail(format!(
                 "download: depot.config begin failed for depot {}",
@@ -396,24 +420,20 @@ pub fn download_resolved_depots_with_cancel_progress(
                 depot.depot_id
             ));
         }
+        // Before any game file is touched, so an aborted write still leaves a
+        // key-independent record of what this build may have put on disk.
+        let _ = write_filelist_sidecar(&config_dir, depot.depot_id, depot.manifest_id, &manifest);
 
         let depot_id = depot.depot_id;
         let depots_done = depot_index as u32;
         let chunk_progress = |done: u64, total: u64, verifying: bool| {
             if let Some(on_progress) = on_progress {
-                let progress = map_write_progress(
-                    depot_id,
-                    depots_done,
-                    depots_total,
-                    done,
-                    total,
-                    verifying,
-                );
+                let progress =
+                    map_write_progress(depot_id, depots_done, depots_total, done, total, verifying);
                 on_progress(&progress);
             }
         };
-        let chunk_progress: crate::depot_writer::DepotChunkProgressCallback =
-            &chunk_progress;
+        let chunk_progress: crate::depot_writer::DepotChunkProgressCallback = &chunk_progress;
         let write_result = write_depot_sequential(
             &manifest,
             &depot.depot_key,
@@ -431,6 +451,10 @@ pub fn download_resolved_depots_with_cancel_progress(
             if write_result.resume_trust_safe {
                 let _ = write_clean_pause_marker(&config_dir, depot.depot_id, depot.manifest_id);
             }
+            // The write may have left this build's files on disk without ever
+            // committing a gid to diff them against — mark the target so the
+            // next successful download reclaims its orphans.
+            record_aborted_build(&config_dir, depot.depot_id, depot.manifest_id);
             return DepotDownloadResult::fail(format!(
                 "download: depot {} write failed: {}",
                 depot.depot_id, write_result.error
@@ -438,6 +462,7 @@ pub fn download_resolved_depots_with_cancel_progress(
         }
 
         if !cfg.finish_depot(depot.depot_id, depot.manifest_id) {
+            record_aborted_build(&config_dir, depot.depot_id, depot.manifest_id);
             return DepotDownloadResult::fail(format!(
                 "download: depot.config finish failed for depot {}",
                 depot.depot_id
@@ -449,6 +474,9 @@ pub fn download_resolved_depots_with_cancel_progress(
         result.depots_completed += 1;
     }
 
+    if result.success {
+        run_stale_file_cleanup(install_dir, &config_dir, depots);
+    }
     result
 }
 
@@ -661,6 +689,209 @@ mod tests {
         assert!(skipped.success);
         assert_eq!(skipped.depots_completed, 0);
         assert_eq!(skipped.depots_skipped, 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn per_batch_fresh_download_keeps_other_batches_config_entries() {
+        // Verify Files runs one fresh native call per app batch (base, then
+        // each DLC); the second batch's reset must not wipe the first's
+        // depot.config entries or the stale-file keep-union goes blind.
+        let dir = temp_dir("fresh_batches_keep_config");
+        let config_dir = dir.join(".DepotDownloader");
+        fs::create_dir_all(&config_dir).unwrap();
+        let server = [CContentServerDirectoryServerInfo {
+            host: "cdn.example".into(),
+            https_support: "mandatory".into(),
+            ..Default::default()
+        }];
+        let spec = |depot_id, manifest_id| ResolvedDepotSpec {
+            depot_id,
+            manifest_id,
+            depot_key: vec![1u8; 32],
+            manifest_request_code: 0,
+        };
+        fs::write(
+            config_dir.join("100_555.manifest"),
+            raw_layout_manifest(100, 555, "base.bin", 5),
+        )
+        .unwrap();
+        fs::write(
+            config_dir.join("200_777.manifest"),
+            raw_layout_manifest(200, 777, "dlc.bin", 5),
+        )
+        .unwrap();
+
+        let base = download_resolved_depots(
+            dir.to_str().unwrap(),
+            &[spec(100, 555)],
+            &server,
+            "",
+            true,
+            4,
+        );
+        assert!(base.success, "{}", base.error);
+        let dlc = download_resolved_depots(
+            dir.to_str().unwrap(),
+            &[spec(200, 777)],
+            &server,
+            "",
+            true,
+            4,
+        );
+        assert!(dlc.success, "{}", dlc.error);
+
+        let cfg = DepotConfigStore::load(&config_dir);
+        assert!(cfg.is_installed(100, 555), "batch 2 must not wipe batch 1");
+        assert!(cfg.is_installed(200, 777));
+        assert!(config_dir.join("100_555.filelist").is_file());
+        assert!(config_dir.join("200_777.filelist").is_file());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_write_records_aborted_build_and_revert_reclaims_it() {
+        let dir = temp_dir("aborted_write_recovery");
+        let config_dir = dir.join(".DepotDownloader");
+        fs::create_dir_all(&config_dir).unwrap();
+        let server = [CContentServerDirectoryServerInfo {
+            host: "cdn.example".into(),
+            https_support: "mandatory".into(),
+            ..Default::default()
+        }];
+        let spec = |manifest_id| ResolvedDepotSpec {
+            depot_id: 100,
+            manifest_id,
+            depot_key: vec![1u8; 32],
+            manifest_request_code: 0,
+        };
+
+        // Branch A (555) installs cleanly (chunkless layout manifest).
+        fs::write(
+            config_dir.join("100_555.manifest"),
+            raw_layout_manifest(100, 555, "game.bin", 5),
+        )
+        .unwrap();
+        let result =
+            download_resolved_depots(dir.to_str().unwrap(), &[spec(555)], &server, "", false, 4);
+        assert!(result.success, "{}", result.error);
+
+        // Branch B (777) needs a real chunk from the unreachable CDN → the
+        // write fails mid-switch, after the sidecar was persisted.
+        fs::write(
+            config_dir.join("100_777.manifest"),
+            raw_chunked_manifest(100, 777, "beta_only.bin"),
+        )
+        .unwrap();
+        let result =
+            download_resolved_depots(dir.to_str().unwrap(), &[spec(777)], &server, "", false, 4);
+        assert!(!result.success);
+        assert!(config_dir.join("100_777.filelist").is_file());
+        // Two pending markers: 555 was recorded for the A→B transition (in
+        // case B committed), 777 records the aborted target itself.
+        assert_eq!(
+            crate::depot_cleanup::pending_cleanup_markers(&config_dir),
+            vec![(100, 555), (100, 777)]
+        );
+
+        // Simulate the partial write the aborted switch left behind, then the
+        // revert-to-A verify (fresh) completing successfully.
+        fs::write(dir.join("beta_only.bin"), b"part").unwrap();
+        let result =
+            download_resolved_depots(dir.to_str().unwrap(), &[spec(555)], &server, "", true, 4);
+        assert!(result.success, "{}", result.error);
+
+        assert!(dir.join("game.bin").exists());
+        assert!(
+            !dir.join("beta_only.bin").exists(),
+            "aborted build's orphan must be reclaimed"
+        );
+        assert!(crate::depot_cleanup::pending_cleanup_markers(&config_dir).is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn raw_chunked_manifest(depot_id: u32, manifest_id: u64, filename: &str) -> Vec<u8> {
+        let mut chunk_body = Vec::new();
+        {
+            let mut writer = Writer::new(&mut chunk_body);
+            writer.bytes_field(1, &[7u8; 20]);
+            writer.tag(2, crate::proto_wire::WireType::Fixed32);
+            writer.raw_bytes(&0x1234_5678u32.to_le_bytes());
+            writer.uint64_field(3, 0);
+            writer.uint32_field(4, 4);
+            writer.uint32_field(5, 4);
+        }
+        let mut file_body = Vec::new();
+        {
+            let mut writer = Writer::new(&mut file_body);
+            writer.string_field(1, filename);
+            writer.uint64_field(2, 4);
+            writer.submessage_field(6, &chunk_body);
+        }
+        let mut payload = Vec::new();
+        Writer::new(&mut payload).submessage_field(1, &file_body);
+
+        let mut metadata = Vec::new();
+        {
+            let mut writer = Writer::new(&mut metadata);
+            writer.uint32_field(1, depot_id);
+            writer.uint64_field(2, manifest_id);
+            writer.bool_field_force(4, false);
+        }
+
+        let mut raw = Vec::new();
+        push_section(&mut raw, PAYLOAD_MAGIC, &payload);
+        push_section(&mut raw, METADATA_MAGIC, &metadata);
+        raw.extend_from_slice(&END_OF_MANIFEST_MAGIC.to_le_bytes());
+        raw
+    }
+
+    #[test]
+    fn branch_switch_deletes_files_absent_from_new_manifest() {
+        let dir = temp_dir("branch_switch_stale_files");
+        let config_dir = dir.join(".DepotDownloader");
+        fs::create_dir_all(&config_dir).unwrap();
+        let server = [CContentServerDirectoryServerInfo {
+            host: "cdn.example".into(),
+            https_support: "mandatory".into(),
+            ..Default::default()
+        }];
+        let spec = |manifest_id| ResolvedDepotSpec {
+            depot_id: 100,
+            manifest_id,
+            depot_key: vec![1u8; 32],
+            manifest_request_code: 0,
+        };
+
+        fs::write(
+            config_dir.join("100_555.manifest"),
+            raw_layout_manifest(100, 555, "beta_only.bin", 5),
+        )
+        .unwrap();
+        let result =
+            download_resolved_depots(dir.to_str().unwrap(), &[spec(555)], &server, "", false, 4);
+        assert!(result.success, "{}", result.error);
+        assert!(dir.join("beta_only.bin").exists());
+
+        // Files outside any manifest must survive the switch untouched.
+        fs::write(dir.join("user_notes.txt"), b"keep me").unwrap();
+
+        fs::write(
+            config_dir.join("100_777.manifest"),
+            raw_layout_manifest(100, 777, "public.bin", 5),
+        )
+        .unwrap();
+        let result =
+            download_resolved_depots(dir.to_str().unwrap(), &[spec(777)], &server, "", false, 4);
+        assert!(result.success, "{}", result.error);
+
+        assert!(dir.join("public.bin").exists());
+        assert!(
+            !dir.join("beta_only.bin").exists(),
+            "stale branch file must be deleted"
+        );
+        assert!(dir.join("user_notes.txt").exists());
+        assert!(crate::depot_cleanup::pending_cleanup_markers(&config_dir).is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
 
