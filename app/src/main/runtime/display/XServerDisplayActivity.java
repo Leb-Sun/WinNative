@@ -8518,6 +8518,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 if (extraArgs == null || extraArgs.isEmpty()) {
                     extraArgs = getIntent().getStringExtra("extra_exec_args");
                 }
+                // Strip %command%/env tokens like the Steam path so args stay consistent across stores.
+                extraArgs = com.winlator.cmod.feature.stores.steam.utils.SteamLaunchOptions.gameArgs(extraArgs);
                 extraArgs = (extraArgs != null && !extraArgs.isEmpty()) ? " " + extraArgs : "";
                 String gameInstallPath = shortcut.getExtra("game_install_path");
 
@@ -8590,6 +8592,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 Log.d("XServerDisplayActivity", gameSource + " game launch: " + args);
             } else {
                 String extraArgs = shortcut.getSettingExtra("execArgs", container.getExecArgs());
+                // Strip %command%/env tokens like the Steam path so args stay consistent across stores.
+                extraArgs = com.winlator.cmod.feature.stores.steam.utils.SteamLaunchOptions.gameArgs(extraArgs);
                 extraArgs = (extraArgs != null && !extraArgs.isEmpty()) ? " " + extraArgs : "";
                 String customResolvedPath = resolveCustomExecutableWinPath(shortcut);
                 if (customResolvedPath != null && !customResolvedPath.isEmpty()) {
