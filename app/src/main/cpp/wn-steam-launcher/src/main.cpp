@@ -444,18 +444,118 @@ static int count_game_processes(const char* exeName) {
     return count;
 }
 
+// Terminates game processes matching exeName, except keepPid and its children (keepPid=0
+// kills all). Reaps the LaunchApp registration spawn / a late spawn. Returns count, -1 on error.
+static int kill_game_processes(const char* exeName, DWORD keepPid) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return -1;
+    PROCESSENTRY32 pe;
+    pe.dwSize = sizeof(pe);
+    int killed = 0;
+    if (Process32First(snap, &pe)) {
+        do {
+            const bool spared = keepPid != 0
+                && (pe.th32ProcessID == keepPid || pe.th32ParentProcessID == keepPid);
+            if (!spared && wn_game_image_matches(pe.szExeFile, exeName)) {
+                HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
+                if (h) {
+                    if (TerminateProcess(h, 0)) killed++;
+                    CloseHandle(h);
+                }
+            }
+        } while (Process32Next(snap, &pe));
+    }
+    CloseHandle(snap);
+    return killed;
+}
+
+static bool append_char(char* buf, size_t cap, size_t* n, char c) {
+    if (*n + 1 >= cap) return false;
+    buf[(*n)++] = c;
+    return true;
+}
+
+// Appends one argv element re-quoted per CommandLineToArgvW rules (backslash runs
+// before an emitted quote must be doubled); false when the buffer would overflow.
+static bool append_quoted_arg(char* buf, size_t cap, size_t* n, const char* a) {
+    const bool quote = (a[0] == '\0') || strpbrk(a, " \t\"") != NULL;
+    if (!quote) {
+        for (const char* p = a; *p; ++p)
+            if (!append_char(buf, cap, n, *p)) return false;
+        return true;
+    }
+    if (!append_char(buf, cap, n, '"')) return false;
+    const char* p = a;
+    while (*p) {
+        size_t backslashes = 0;
+        while (*p == '\\') { backslashes++; p++; }
+        if (*p == '\0') {
+            // Run ends the arg: double it so the closing quote stays a delimiter.
+            for (size_t k = 0; k < backslashes * 2; k++)
+                if (!append_char(buf, cap, n, '\\')) return false;
+            break;
+        }
+        if (*p == '"') {
+            for (size_t k = 0; k < backslashes * 2 + 1; k++)
+                if (!append_char(buf, cap, n, '\\')) return false;
+        } else {
+            for (size_t k = 0; k < backslashes; k++)
+                if (!append_char(buf, cap, n, '\\')) return false;
+        }
+        if (!append_char(buf, cap, n, *p)) return false;
+        p++;
+    }
+    return append_char(buf, cap, n, '"');
+}
+
+// Re-joins argv[2..] for forwarding onto the game's command line; on overflow
+// whole trailing args are dropped (never a half token) with a logged warning.
+static const char* build_extra_args(int argc, char** argv) {
+    static char buf[4096];
+    size_t n = 0;
+    buf[0] = '\0';
+    for (int i = 2; i < argc; i++) {
+        size_t before = n;
+        bool ok = (n == 0) || append_char(buf, sizeof(buf), &n, ' ');
+        ok = ok && append_quoted_arg(buf, sizeof(buf), &n, argv[i]);
+        if (!ok) {
+            n = before;
+            log_line("[wn-launcher] extra args exceed %zu bytes - dropped %d trailing arg(s)",
+                     sizeof(buf), argc - i);
+            break;
+        }
+    }
+    buf[n] = '\0';
+    return buf;
+}
+
 // Direct launch when LaunchApp dispatches cleanly but never spawns the game (no
 // real Steam UI/reaper under Wine to consume the request). Safe vs AlreadyRunning
 // because the clean-shutdown arm reaps the CM session on exit. Logs the "game
 // process started pid=" marker WnLauncherStatusTailer treats as launch-complete.
-static bool create_process_game(const char* gameExe, const char* exeName) {
+static DWORD create_process_game(const char* gameExe, const char* exeName,
+                                 const char* extraArgs) {
     char cwd[MAX_PATH];
     snprintf(cwd, sizeof(cwd), "%s", gameExe);
     char* slash = strrchr(cwd, '\\');
     if (slash) *slash = '\0'; else cwd[0] = '\0';
 
-    char cmd[MAX_PATH + 8];
-    snprintf(cmd, sizeof(cmd), "\"%s\"", gameExe);
+    char cmd[MAX_PATH + 4096 + 16];
+    int written;
+    if (extraArgs && extraArgs[0]) {
+        written = snprintf(cmd, sizeof(cmd), "\"%s\" %s", gameExe, extraArgs);
+    } else {
+        written = snprintf(cmd, sizeof(cmd), "\"%s\"", gameExe);
+    }
+    if (written < 0 || written >= (int) sizeof(cmd)) {
+        // A truncated cmd can end mid-token or with an unbalanced quote — launch bare instead.
+        log_line("[wn-launcher] CreateProcess cmd truncated (%d bytes) — "
+                 "dropping args, launching bare exe", written);
+        snprintf(cmd, sizeof(cmd), "\"%s\"", gameExe);
+    }
+    // Args content stays out of the log — execArgs can carry +password style credentials.
+    log_line("[wn-launcher] CreateProcess exe=\"%s\" argsLen=%zu",
+             gameExe, (extraArgs && extraArgs[0]) ? strlen(extraArgs) : (size_t) 0);
 
     STARTUPINFOA si;
     memset(&si, 0, sizeof(si));
@@ -470,13 +570,14 @@ static bool create_process_game(const char* gameExe, const char* exeName) {
     if (!ok) {
         log_line("[wn-launcher] CreateProcess fallback FAILED for \"%s\" (GLE=%lu)",
                  exeName, GetLastError());
-        return false;
+        return 0;
     }
+    DWORD pid = pi.dwProcessId;
     log_line("[wn-launcher] game process started pid=%lu via CreateProcess "
-             "fallback (\"%s\")", (unsigned long) pi.dwProcessId, exeName);
+             "fallback (\"%s\")", (unsigned long) pid, exeName);
     if (pi.hThread) CloseHandle(pi.hThread);
     if (pi.hProcess) CloseHandle(pi.hProcess);
-    return true;
+    return pid;
 }
 
 static void dump_loaded_modules(const char* when) {
@@ -898,13 +999,15 @@ int main(int argc, char** argv) {
     const char* token    = getenv("WN_STEAM_TOKEN");
     uint64_t    steamId  = env_u64("WN_STEAM_STEAMID");
     const char* gameExe  = (argc > 1) ? argv[1] : NULL;
+    const char* extraArgs = build_extra_args(argc, argv);
     uint32_t    appId    = appIdStr ? (uint32_t) strtoul(appIdStr, NULL, 10) : 0;
 
-    log_line("[wn-launcher] env appId=%u steamId=%llu user=%s exe=%s",
+    log_line("[wn-launcher] env appId=%u steamId=%llu user=%s exe=%s argsLen=%zu",
              appId,
              (unsigned long long) steamId,
              user ? user : "(null)",
-             gameExe ? gameExe : "(null)");
+             gameExe ? gameExe : "(null)",
+             strlen(extraArgs));
     if (token && *token) {
         size_t tokenLen = strlen(token);
         log_line("[wn-launcher] token len=%zu prefix=%.*s suffix=%.*s",
@@ -1300,11 +1403,22 @@ int main(int argc, char** argv) {
 
     bool launchedViaApp = false;
     bool launchedViaFallback = false;
+    // Set when LaunchApp registered the app but we take over the launch to inject the
+    // user's full args (see haveUserArgs). Routes to CreateProcess below.
+    bool reapedForUserArgs = false;
+    // Subset of the above where LaunchApp registered but never spawned within the wait —
+    // arms the post-relaunch guard against a late (slow-device) spawn.
+    bool relaunchedNoSpawn = false;
     const char* launchFailureReason = "LaunchApp path unavailable";
 
     // User override: skip LaunchApp (it would spawn the app's configured entry, not the chosen exe) and CreateProcess the selected exe directly; the Steam session is already up.
     const char* directExeEnv = getenv("WN_STEAM_DIRECT_EXE");
     const bool directExe = directExeEnv && directExeEnv[0] != '\0';
+
+    // Presence flag: when set, LaunchApp only registers the app, then we reap its spawn and
+    // relaunch via CreateProcess with the full args (argv) — pszUserArgs crashes under Wine.
+    const char* userArgsEnv = getenv("WN_STEAM_USER_ARGS");
+    const bool haveUserArgs = userArgsEnv && userArgsEnv[0] != '\0';
 
     if (directExe) {
         log_line("[wn-launcher] WN_STEAM_DIRECT_EXE set — user-selected exe \"%s\"; "
@@ -1328,6 +1442,16 @@ int main(int argc, char** argv) {
                 appMgr_vt[kVtAppMgr_LaunchApp / 8];
             uint64_t gameId = (uint64_t)(appId & 0xFFFFFFu);
 
+            // Launch-option index (config.launch key) chosen on the Android side; 0 = default entry.
+            // Lets Steam's LaunchApp spawn the user's picked entry (e.g. MCC's -no-eac) itself.
+            const char* launchOptEnv = getenv("WN_STEAM_LAUNCH_OPTION");
+            const uint32_t uLaunchOption = (launchOptEnv && launchOptEnv[0] != '\0')
+                    ? (uint32_t) atoi(launchOptEnv) : 0;
+            if (uLaunchOption != 0) {
+                log_line("[wn-launcher] WN_STEAM_LAUNCH_OPTION=%u — LaunchApp will use this "
+                         "launch-option index", uLaunchOption);
+            }
+
             // RefreshAppInfo() slot — re-primes appinfo between MissingConfig retries.
             void* refreshAppInfoP = appMgr_vt[kVtAppMgr_RefreshAppInfo / 8];
 
@@ -1335,10 +1459,13 @@ int main(int argc, char** argv) {
             // the 35s watchdog.
             const int kMaxLaunchAttempts = 5;
             for (int attempt = 1; attempt <= kMaxLaunchAttempts && !launchedViaApp; ++attempt) {
-                uint64_t apiCall = launchApp(appMgr, &gameId, 0, 300, "");
+                // Never pass pszUserArgs — it crashes steamclient's launch under Wine.
+                // With custom args we relaunch via CreateProcess after registration (below).
+                uint64_t apiCall = launchApp(appMgr, &gameId, uLaunchOption, 300, "");
+                // prefix is a WnLauncherStatusTailer marker; relaunchForUserArgs is a bool (no creds).
                 log_line("[wn-launcher] IClientAppManager.LaunchApp(appId=%u) "
-                         "attempt=%d/%d -> HSteamAPICall=0x%llx", appId,
-                         attempt, kMaxLaunchAttempts,
+                         "attempt=%d/%d relaunchForUserArgs=%d -> HSteamAPICall=0x%llx", appId,
+                         attempt, kMaxLaunchAttempts, haveUserArgs ? 1 : 0,
                          (unsigned long long) apiCall);
 
             int eAppError = -1;  // -1 = not polled / unknown
@@ -1475,15 +1602,19 @@ int main(int argc, char** argv) {
             } else {
                 // NoError(0)/indeterminate(-1): accepted. Wait WITHOUT re-dispatching
                 // — a second LaunchApp while one is pending cancels the spawn (Wine).
-                const int kGameAppearLoops = 40;  // 40 * 500ms = 20s
+                const int kGameAppearLoops = 40;                             // 20s
+                // With custom args we relaunch regardless, so cap the wait shorter; a
+                // slow-device late spawn is caught by the guard after the relaunch (below).
+                const int appearLoops = haveUserArgs ? 20 : kGameAppearLoops;  // 10s vs 20s
                 log_line("[wn-launcher] LaunchApp dispatched (attempt %d/%d, "
                          "EAppUpdateError=%d); waiting up to %ds for \"%s\" to "
                          "appear (committed — no re-dispatch)",
                          attempt, kMaxLaunchAttempts, eAppError,
-                         kGameAppearLoops / 2, exeName);
-                for (int w = 0; w < kGameAppearLoops && !launchedViaApp; ++w) {
+                         appearLoops / 2, exeName);
+                bool appeared = false;
+                for (int w = 0; w < appearLoops && !appeared; ++w) {
                     if (count_game_processes(exeName) > 0) {
-                        launchedViaApp = true;
+                        appeared = true;
                         break;
                     }
                     if (bGetCallback && freeLastCallback) {
@@ -1492,16 +1623,48 @@ int main(int argc, char** argv) {
                     }
                     Sleep(500);
                 }
-                if (launchedViaApp) {
+                if (appeared && haveUserArgs) {
+                    // LaunchApp registered + spawned the game (entry args only); reap it and
+                    // relaunch below with the full args — same sequence the crash path relies on.
+                    Sleep(1000);  // let steamclient finish registering the spawn
+                    if (bGetCallback && freeLastCallback) {
+                        char cb[64];
+                        while (bGetCallback(pipe, cb)) freeLastCallback(pipe);
+                    }
+                    int killed = kill_game_processes(exeName, 0);
+                    for (int w = 0; w < 40 && count_game_processes(exeName) != 0; ++w) {
+                        if (bGetCallback && freeLastCallback) {
+                            char cb[64];
+                            while (bGetCallback(pipe, cb)) freeLastCallback(pipe);
+                        }
+                        Sleep(250);  // up to 10s for the reaped spawn to fully exit
+                    }
+                    log_line("[wn-launcher] LaunchApp registered \"%s\" (reaped %d spawn(s)); "
+                             "relaunching with full user args (attempt %d/%d)",
+                             exeName, killed, attempt, kMaxLaunchAttempts);
+                    reapedForUserArgs = true;
+                    break;
+                } else if (appeared) {
+                    launchedViaApp = true;
                     log_line("[wn-launcher] LaunchApp: \"%s\" is running "
                              "(attempt %d/%d)", exeName, attempt,
                              kMaxLaunchAttempts);
+                } else if (haveUserArgs) {
+                    // NoError but no spawn in the shortened window — registration is committed,
+                    // so relaunch now instead of idling; the guard below reaps a late spawn.
+                    log_line("[wn-launcher] LaunchApp registered \"%s\" (EAppUpdateError=%d, "
+                             "no spawn in %ds); relaunching with full user args "
+                             "(attempt %d/%d)", exeName, eAppError, appearLoops / 2,
+                             attempt, kMaxLaunchAttempts);
+                    reapedForUserArgs = true;
+                    relaunchedNoSpawn = true;
+                    break;
                 } else {
                     log_line("[wn-launcher] LaunchApp attempt %d/%d: \"%s\" "
                              "accepted (EAppUpdateError=%d) but never spawned in "
                              "%ds — not re-dispatching (would cancel the pending "
                              "launch) — falling back", attempt, kMaxLaunchAttempts,
-                             exeName, eAppError, kGameAppearLoops / 2);
+                             exeName, eAppError, appearLoops / 2);
                     launchFailureReason =
                         "LaunchApp accepted but the game never spawned";
                     break;
@@ -1515,17 +1678,40 @@ int main(int argc, char** argv) {
         launchFailureReason = engine ? "appId was 0" : "IClientEngine was null";
     }
 
-    // LaunchApp didn't bring the game up — start it directly; the "dispatched/never appeared/falling back" log markers disarm WnLauncherStatusTailer's post-dispatch watchdog.
+    // LaunchApp didn't bring the game up (or was reaped for a full-args relaunch) — start it
+    // directly; the dispatched/never-appeared/reaped log markers keep the tailer on "Launching".
+    DWORD relaunchPid = 0;
     if (!launchedViaApp) {
         if (directExe) {
             log_line("[wn-launcher] direct-exe mode: launching user-selected \"%s\" via "
                      "CreateProcess (Steam LaunchApp skipped)", exeName);
+        } else if (reapedForUserArgs) {
+            log_line("[wn-launcher] relaunching \"%s\" with full user args via CreateProcess "
+                     "(LaunchApp used for registration only)", exeName);
         } else {
             log_line("[wn-launcher] LaunchApp dispatched but \"%s\" never appeared "
                      "— falling back to CreateProcess (%s)",
                      exeName, launchFailureReason);
         }
-        launchedViaFallback = create_process_game(gameExe, exeName);
+        relaunchPid = create_process_game(gameExe, exeName, extraArgs);
+        launchedViaFallback = (relaunchPid != 0);
+    }
+
+    // Slow-device guard: LaunchApp's spawn can still appear after we relaunched (late, not
+    // absent). Reap any game process that isn't our instance or its child, so no duplicate runs.
+    if (relaunchedNoSpawn && launchedViaFallback) {
+        for (int w = 0; w < 20; ++w) {  // ~10s — covers the appear window we shortened
+            int dup = kill_game_processes(exeName, relaunchPid);
+            if (dup > 0) {
+                log_line("[wn-launcher] guard: reaped %d late LaunchApp spawn(s) "
+                         "(kept our pid=%lu)", dup, (unsigned long) relaunchPid);
+            }
+            if (bGetCallback && freeLastCallback) {
+                char cb[64];
+                while (bGetCallback(pipe, cb)) freeLastCallback(pipe);
+            }
+            Sleep(500);
+        }
     }
 
     if (launchedViaApp || launchedViaFallback) {

@@ -51,6 +51,7 @@ import androidx.core.view.WindowInsetsCompat;
 import com.winlator.cmod.BuildConfig;
 import com.winlator.cmod.feature.leaderboard.SessionRecordingController;
 import com.winlator.cmod.feature.stores.steam.enums.Marker;
+import com.winlator.cmod.feature.stores.steam.service.SteamService;
 import com.winlator.cmod.feature.stores.steam.utils.MarkerUtils;
 import com.winlator.cmod.feature.stores.steam.utils.PrefManager;
 import com.winlator.cmod.feature.stores.steam.utils.SteamUtils;
@@ -296,6 +297,14 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
     private final EnvVars envVars = new EnvVars();
     // True when the chosen launch exe differs from Steam's configured entry: launcher skips Steam LaunchApp and CreateProcess'es the selected exe directly. Recomputed per launch.
     private boolean wnSteamDirectExeOverride = false;
+    // config.launch index to launch via Steam's LaunchApp (>=0), else -1 for direct-exe. Per launch.
+    private int wnSteamLaunchOptionIndex = -1;
+    // Presence flag (custom-only game args): when non-empty the launcher uses LaunchApp only to
+    // register the app, then reaps that spawn and relaunches with the full args via CreateProcess. Per launch.
+    private String wnSteamUserArgs = "";
+    // config.launch args of the entry being launched, resolved from appinfo per launch;
+    // null falls back to the persisted override. Steam applies these only on its own spawn.
+    private String wnSteamEntryArgs = null;
     private boolean firstTimeBoot = false;
     private SharedPreferences preferences;
     private boolean isMouseDisabled = false;
@@ -2109,17 +2118,10 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         return "common".equalsIgnoreCase(normalized) || "steamapps".equalsIgnoreCase(normalized);
     }
 
+    /** Delegates to the shared normalizer so the persist and launch sides compare identically. */
     private String normalizeRelativeExeCandidate(String value) {
         if (value == null) return "";
-
-        String normalized = value.trim().replace('\\', '/');
-        while (normalized.startsWith("/")) {
-            normalized = normalized.substring(1);
-        }
-        if (normalized.matches("^[A-Za-z]:/.*")) {
-            normalized = normalized.substring(3);
-        }
-        return normalized;
+        return SteamService.normalizeRelativeExe(value);
     }
 
     private File resolveImmediateChildCaseInsensitive(File parent, String childName) {
@@ -6898,6 +6900,24 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                                     "Steam Launcher: WN_STEAM_DIRECT_EXE=1 — user-overridden "
                                     + "launch exe; launcher will CreateProcess the selected exe "
                                     + "directly (Steam LaunchApp skipped)");
+                        } else if (wnSteamLaunchOptionIndex >= 0) {
+                            envVars.put("WN_STEAM_LAUNCH_OPTION",
+                                    String.valueOf(wnSteamLaunchOptionIndex));
+                            Log.i("XServerDisplayActivity",
+                                    "Steam Launcher: WN_STEAM_LAUNCH_OPTION="
+                                    + wnSteamLaunchOptionIndex + " — launcher will use Steam LaunchApp "
+                                    + "with the selected launch-option index");
+                        }
+                        // Presence flag: the launcher reaps the LaunchApp spawn and relaunches via
+                        // CreateProcess with the full args (argv). Direct-exe already gets them via argv.
+                        if (!wnSteamDirectExeOverride
+                                && wnSteamUserArgs != null && !wnSteamUserArgs.isEmpty()) {
+                            envVars.put("WN_STEAM_USER_ARGS", wnSteamUserArgs);
+                            // Length only: execArgs can carry +password style credentials.
+                            Log.i("XServerDisplayActivity",
+                                    "Steam Launcher: WN_STEAM_USER_ARGS len="
+                                    + wnSteamUserArgs.length()
+                                    + " — launcher will reap the LaunchApp spawn and relaunch with full args");
                         }
                         File planWCa = new File(container.getRootDir(),
                                 ".wine/drive_c/Program Files (x86)/Steam/wnsteam_cacert.pem");
@@ -8342,7 +8362,10 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                 int appId = Integer.parseInt(shortcut.getExtra("app_id"));
                 // Reset per launch; set below once the launch exe is resolved.
                 wnSteamDirectExeOverride = false;
-                String steamExtraArgs = appendSteamJoinConnect(
+                wnSteamLaunchOptionIndex = -1;
+                wnSteamEntryArgs = null;
+                String steamExtraArgs = steamCombinedGameArgs();
+                wnSteamUserArgs = appendSteamJoinConnect(
                         com.winlator.cmod.feature.stores.steam.utils.SteamLaunchOptions
                                 .gameArgs(shortcut.getSettingExtra("execArgs", container.getExecArgs())));
                 steamExtraArgs = (steamExtraArgs != null && !steamExtraArgs.isEmpty()) ? " " + steamExtraArgs : "";
@@ -8394,8 +8417,33 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                     // Goldberg launches through steamapps/common to avoid drive-letter drift.
                     String gameDirName = (gameInstPath != null) ? new File(gameInstPath).getName() : "";
                     String relativeExe = resolveRelativeGameExe(appId, gameInstPath);
-                    // If the resolved exe isn't Steam's configured launch entry the user overrode it; tell the launcher to skip LaunchApp and start the selected exe directly.
-                    wnSteamDirectExeOverride = isUserOverriddenSteamExe(appId, relativeExe);
+                    boolean exeOverridden = isUserOverriddenSteamExe(appId, relativeExe);
+                    String launchExeArgs = shortcut.getExtra("launch_exe_args");
+                    // Route through Steam's LaunchApp with the config.launch index of the exe that will
+                    // run (registers the game, survives relaunch); direct-exe only for exes not in appinfo.
+                    String pickedExe = shortcut.getExtra("launch_option_exe");
+                    String pickedArgs = shortcut.getExtra("launch_option_args");
+                    int optIndex = -1;
+                    if (pickedExe != null && !pickedExe.isEmpty()) {
+                        optIndex = SteamBridge.launchOptionIndexFor(appId, pickedExe,
+                                pickedArgs != null ? pickedArgs : "");
+                    }
+                    if (optIndex < 0 && !relativeExe.isEmpty()) {
+                        optIndex = SteamBridge.launchOptionIndexForExe(appId, relativeExe);
+                    }
+                    wnSteamLaunchOptionIndex = optIndex;
+                    boolean useLaunchOptionIndex = optIndex >= 0;
+                    wnSteamDirectExeOverride = !useLaunchOptionIndex
+                            && (exeOverridden || !launchExeArgs.isEmpty());
+
+                    if (useLaunchOptionIndex) {
+                        // The entry's own args live in appinfo and ride only Steam's own spawn, so a
+                        // reap-relaunch or fallback would drop them (a default-entry pick persists no
+                        // override). Resolve them here and rebuild the command line that argv carries.
+                        wnSteamEntryArgs = SteamBridge.launchOptionArgsForKey(appId, optIndex);
+                        steamExtraArgs = steamCombinedGameArgs();
+                        steamExtraArgs = !steamExtraArgs.isEmpty() ? " " + steamExtraArgs : "";
+                    }
 
                     if (!relativeExe.isEmpty() && !gameDirName.isEmpty()) {
                         String steamGameExe = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\"
@@ -8728,8 +8776,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             exeRunDir = exePath.substring(0, lastSep);
         }
 
-        String perGameExecArgs = shortcut != null ? shortcut.getSettingExtra("execArgs", container.getExecArgs()) : container.getExecArgs();
-        String exeCommandLine = appendSteamJoinConnect(com.winlator.cmod.feature.stores.steam.utils.SteamLaunchOptions.gameArgs(perGameExecArgs));
+        String exeCommandLine = steamCombinedGameArgs();
 
         String iniContent = buildColdClientIni(appId, exePath, exeRunDir, exeCommandLine, runtimePatcher);
 
@@ -8814,7 +8861,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         }
 
         String perGameExecArgs = shortcut != null ? shortcut.getSettingExtra("execArgs", container.getExecArgs()) : container.getExecArgs();
-        String exeCommandLine = appendSteamJoinConnect(com.winlator.cmod.feature.stores.steam.utils.SteamLaunchOptions.gameArgs(perGameExecArgs));
+        String exeCommandLine = appendSteamJoinConnect(com.winlator.cmod.feature.stores.steam.utils.SteamLaunchOptions.gameArgs(combineWithSelectedLaunchArgs(perGameExecArgs)));
 
         String iniContent = buildColdClientIni(appId, exePath, exeRunDir, exeCommandLine, runtimePatcher);
 
@@ -8918,10 +8965,40 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
         if (resolvedRelativeExe == null || resolvedRelativeExe.isEmpty()) return false;
         String steamDefaultExe = SteamBridge.getInstalledExe(appId);
         if (steamDefaultExe == null || steamDefaultExe.isEmpty()) return false;
-        String resolved = exeBaseName(resolvedRelativeExe);
-        String configured = exeBaseName(steamDefaultExe);
+        // Full-path compare: entries may differ only by directory (x64/ vs x86/ builds).
+        String resolved = normalizeRelativeExeCandidate(resolvedRelativeExe);
+        String configured = normalizeRelativeExeCandidate(steamDefaultExe);
         return !resolved.isEmpty() && !configured.isEmpty()
                 && !resolved.equalsIgnoreCase(configured);
+    }
+
+    /**
+     * Launch entry's args (resolved from appinfo, else the persisted {@code launch_exe_args}
+     * override) merged with the given custom args — the single resolver for every Steam channel.
+     */
+    private String combineWithSelectedLaunchArgs(String customArgs) {
+        String entryArgs = "";
+        if (wnSteamEntryArgs != null) {
+            entryArgs = wnSteamEntryArgs;
+        } else if (shortcut != null) {
+            // Appinfo couldn't name the entry: fall back to the picker's own record, since the
+            // launch_exe_args override is empty for a default-entry pick and would drop its args.
+            entryArgs = !shortcut.getExtra("launch_option_exe").isEmpty()
+                    ? shortcut.getExtra("launch_option_args")
+                    : shortcut.getExtra("launch_exe_args");
+        }
+        return com.winlator.cmod.feature.stores.steam.utils.SteamLaunchOptions.combineSteamLaunchArgs(
+                entryArgs, customArgs);
+    }
+
+    /** Combined (picked-entry + custom) game args — the string every args-on-cmdline Steam channel ships. */
+    private String steamCombinedGameArgs() {
+        String perGameExecArgs = shortcut != null
+                ? shortcut.getSettingExtra("execArgs", container.getExecArgs())
+                : container.getExecArgs();
+        return appendSteamJoinConnect(
+                com.winlator.cmod.feature.stores.steam.utils.SteamLaunchOptions
+                        .gameArgs(combineWithSelectedLaunchArgs(perGameExecArgs)));
     }
 
     private String resolveRelativeGameExe(int appId, String gameInstPath) {
@@ -10530,14 +10607,29 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
             int steamAccountId = com.winlator.cmod.feature.stores.steam.utils.PrefManager.INSTANCE.getSteamUserAccountId();
             String steamUserDataId = steamAccountId > 0 ? String.valueOf(steamAccountId) : steamId64;
 
-            // Stamp-cache the registry/userdata/local-config edits so warm launches skip the per-launch file-copy / VDF-parse work. Stamp key appId|userDataId — change either and it re-runs.
+            // Stamp-cache the registry/userdata/local-config edits so warm launches skip the per-launch file-copy / VDF-parse work. Stamp key appId|userDataId|effectiveLaunchOptions — change any and it re-runs.
             File steamEnvStamp = new File(winePrefix,
                     ".wine/drive_c/.wn-steamenv-" + appId + "-" + steamUserDataId + ".stamp");
-            String expectedStamp = "v1|" + appId + "|" + steamUserDataId;
+            // Combined (entry + custom) line, used only as the stamp key so a changed selection or
+            // custom-arg edit re-runs the warm/cold steam-env setup below.
+            String effectiveLaunchOptions = combineWithSelectedLaunchArgs(
+                    shortcut != null ? shortcut.getSettingExtra("execArgs", container.getExecArgs())
+                                     : container.getExecArgs());
+            // Rust setLaunchCommandLine gets custom-only args: the entry's own args come via the
+            // launch-option index, so the combined line would double them.
+            String customLaunchOptions = (shortcut != null
+                    ? shortcut.getSettingExtra("execArgs", container.getExecArgs())
+                    : container.getExecArgs());
+            if (customLaunchOptions == null) customLaunchOptions = "";
+            customLaunchOptions = customLaunchOptions.trim();
+            String expectedStamp = "v2|" + appId + "|" + steamUserDataId
+                    + "|" + effectiveLaunchOptions;
             String existingStamp = steamEnvStamp.exists()
                     ? FileUtils.readString(steamEnvStamp).trim() : "";
             boolean steamEnvWarm = expectedStamp.equals(existingStamp);
 
+            // These feed steamclient's LaunchApp spawn: used directly on the no-reap (picker-only) path;
+            // on the custom-args path the launcher reaps that spawn and CreateProcess delivers the args.
             if (!steamEnvWarm) {
                 try {
                     SteamUtils.autoLoginUserChanges(imageFs);
@@ -10548,7 +10640,8 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
 
                 skipFirstTimeSteamSetup(winePrefix);
                 reconcileSteamUserdata(steamDir, steamUserDataId, steamId64);
-                SteamUtils.updateOrModifyLocalConfig(imageFs, container, String.valueOf(appId), steamUserDataId);
+                SteamUtils.updateOrModifyLocalConfig(imageFs, container, String.valueOf(appId), steamUserDataId,
+                        customLaunchOptions);
                 setupLightweightSteamConfig(steamDir, steamUserDataId);
 
                 try {
@@ -10558,6 +10651,10 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                             "Failed to write steam-env stamp at " + steamEnvStamp.getPath(), e);
                 }
             } else {
+                // Command line + family-shared flag are per-process native state — re-push on warm launches.
+                com.winlator.cmod.feature.stores.steam.wnsteam.WnLibSteamClient.INSTANCE
+                        .setLaunchCommandLine(customLaunchOptions);
+                SteamUtils.pushAppFamilyShared(String.valueOf(appId));
                 Log.d("XServerDisplayActivity",
                         "Steam env warm-cache hit (appId=" + appId
                                 + ", userId=" + steamUserDataId + ") — skipping reconcile + autoLogin");

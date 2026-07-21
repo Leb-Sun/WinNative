@@ -43,6 +43,59 @@ public class SteamBridge {
     }
   }
 
+  /** config.launch index of the selected option (Steam LaunchApp launch-option key), or -1. */
+  public static int launchOptionIndexFor(int appId, String executable, String arguments) {
+    try {
+      Class<?> companion =
+          Class.forName("com.winlator.cmod.feature.stores.steam.service.SteamService$Companion");
+      Object instance =
+          Class.forName("com.winlator.cmod.feature.stores.steam.service.SteamService")
+              .getField("Companion")
+              .get(null);
+      Method method =
+          companion.getMethod("launchOptionIndexFor", int.class, String.class, String.class);
+      return (Integer) method.invoke(instance, appId, executable, arguments);
+    } catch (Exception e) {
+      Log.e(TAG, "Failed to call SteamService.launchOptionIndexFor", e);
+      return -1;
+    }
+  }
+
+  /** First config.launch index whose executable matches (exe-only fallback), or -1. */
+  public static int launchOptionIndexForExe(int appId, String executable) {
+    try {
+      Class<?> companion =
+          Class.forName("com.winlator.cmod.feature.stores.steam.service.SteamService$Companion");
+      Object instance =
+          Class.forName("com.winlator.cmod.feature.stores.steam.service.SteamService")
+              .getField("Companion")
+              .get(null);
+      Method method = companion.getMethod("launchOptionIndexForExe", int.class, String.class);
+      return (Integer) method.invoke(instance, appId, executable);
+    } catch (Exception e) {
+      Log.e(TAG, "Failed to call SteamService.launchOptionIndexForExe", e);
+      return -1;
+    }
+  }
+
+  /** Args of the config.launch entry with this key, or "" when appinfo can't resolve it. */
+  public static String launchOptionArgsForKey(int appId, int launchKey) {
+    try {
+      Class<?> companion =
+          Class.forName("com.winlator.cmod.feature.stores.steam.service.SteamService$Companion");
+      Object instance =
+          Class.forName("com.winlator.cmod.feature.stores.steam.service.SteamService")
+              .getField("Companion")
+              .get(null);
+      Method method = companion.getMethod("launchOptionArgsForKey", int.class, int.class);
+      Object result = method.invoke(instance, appId, launchKey);
+      return result != null ? (String) result : "";
+    } catch (Exception e) {
+      Log.e(TAG, "Failed to call SteamService.launchOptionArgsForKey", e);
+      return "";
+    }
+  }
+
   /** Downloads experimental-drm if missing, then extracts it. Blocking call. */
   public static boolean ensureColdClientSupportReady(Context context) {
     try {

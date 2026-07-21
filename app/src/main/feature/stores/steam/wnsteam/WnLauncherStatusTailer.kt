@@ -118,6 +118,10 @@ class WnLauncherStatusTailer(
         val isCreateProcessFallback = line.contains("LaunchApp dispatched")
                 && line.contains("never appeared")
                 && line.contains("falling back to CreateProcess")
+        // Registration-only path: LaunchApp registered + spawned the game, the launcher
+        // reaped that spawn and is relaunching with the user's full args via CreateProcess.
+        val isRegistrationReap = line.contains("LaunchApp registered")
+                && line.contains("relaunching with full user args")
         val phase = phaseFor(line)
         if (phase != null && phase != lastEmitted) {
             emitPhase(phase, line)
@@ -135,9 +139,10 @@ class WnLauncherStatusTailer(
         } else if (isFatal) {
             android.util.Log.w(TAG, "fatal phase (launcher LoadLibrary failed) — signaling launch failure")
             main.post { onLaunchFailed?.invoke(appContext.getString(R.string.preloader_steam_launcher_start_failed)) }
-        } else if (isCreateProcessFallback) {
-            // Keep the UI on "Launching <game>" through the fallback; disarm the watchdog.
-            android.util.Log.w(TAG, "LaunchApp exhausted retries — launcher will try CreateProcess fallback (UI stays on Launching)")
+        } else if (isCreateProcessFallback || isRegistrationReap) {
+            // Keep the UI on "Launching <game>" through the fallback / registration reap;
+            // disarm the watchdog so the reap + relaunch window can't trip a spurious failure.
+            android.util.Log.w(TAG, "LaunchApp handing off to CreateProcess (UI stays on Launching)")
             launchAppDispatchedAt = 0L
         }
     }
