@@ -50,6 +50,7 @@ import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.RocketLaunch
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Save
@@ -140,6 +141,8 @@ internal fun LibraryGameLaunchScreen(
     showVerifyFiles: Boolean = true,
     showCheckForUpdate: Boolean = true,
     showWorkshop: Boolean = true,
+    showLaunchOptions: Boolean = false,
+    onLaunchOptions: () -> Unit = {},
     playEnabled: Boolean = true,
     playDisabledLabel: String? = null,
     onBack: () -> Unit,
@@ -278,11 +281,13 @@ internal fun LibraryGameLaunchScreen(
                 showCheckForUpdate = showCheckForUpdate,
                 showWorkshop = showWorkshop,
                 showAchievements = onAchievements != null,
+                showLaunchOptions = showLaunchOptions,
                 areSteamActionsEnabled = areSteamActionsEnabled,
                 onVerifyFiles = onVerifyFiles,
                 onCheckForUpdate = onCheckForUpdate,
                 onWorkshop = onWorkshop,
                 onAchievements = { onAchievements?.invoke() },
+                onLaunchOptions = onLaunchOptions,
             )
         }
 
@@ -821,11 +826,13 @@ private fun SourceTag(
     showCheckForUpdate: Boolean = true,
     showWorkshop: Boolean = true,
     showAchievements: Boolean = false,
+    showLaunchOptions: Boolean = false,
     areSteamActionsEnabled: Boolean = true,
     onVerifyFiles: () -> Unit = {},
     onCheckForUpdate: () -> Unit = {},
     onWorkshop: () -> Unit = {},
     onAchievements: () -> Unit = {},
+    onLaunchOptions: () -> Unit = {},
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var anchorHeightPx by remember { mutableStateOf(0) }
@@ -901,6 +908,13 @@ private fun SourceTag(
                         icon = Icons.Outlined.EmojiEvents,
                         label = stringResource(R.string.steam_achievements_title),
                     ) { menuOpen = false; onAchievements() }
+                }
+                if (showLaunchOptions) {
+                    LaunchSourceMenuItem(
+                        icon = Icons.Outlined.RocketLaunch,
+                        label = stringResource(R.string.store_game_launch_options),
+                        enabled = areSteamActionsEnabled,
+                    ) { menuOpen = false; onLaunchOptions() }
                 }
             }
         }
