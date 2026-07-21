@@ -89,6 +89,7 @@ import com.winlator.cmod.feature.steamcloudsync.SteamAutoCloud
 import com.winlator.cmod.feature.sync.google.CloudSyncManager
 import com.winlator.cmod.runtime.container.Container
 import com.winlator.cmod.runtime.container.ContainerManager
+import com.winlator.cmod.runtime.container.Shortcut
 import com.winlator.cmod.runtime.display.environment.ImageFs
 import com.winlator.cmod.runtime.system.GPUInformation
 import com.winlator.cmod.runtime.system.SessionKeepAliveService
@@ -1477,12 +1478,202 @@ class SteamService : Service() {
         fun getInstalledExe(appId: Int): String =
             getWindowsLaunchInfos(appId).firstOrNull()?.executable ?: ""
 
+        /**
+         * `config.launch` key of the entry matching (executable, arguments), handed to
+         * `IClientAppManager::LaunchApp` (position fallback for pre-launchId caches; -1 if none).
+         */
+        fun launchOptionIndexFor(
+            appId: Int,
+            executable: String,
+            arguments: String,
+        ): Int {
+            val launches = getAppInfoOf(appId)?.config?.launch ?: return -1
+            val exe = normalizeRelativeExe(executable)
+            val args = arguments.trim()
+            val i =
+                launches.indexOfFirst {
+                    normalizeRelativeExe(it.executable).equals(exe, ignoreCase = true) &&
+                        it.arguments.trim() == args
+                }
+            return launchOptionKeyAt(launches, i)
+        }
+
+        /**
+         * `config.launch` key of the first entry whose executable matches — exe-only fallback when
+         * the picker field was cleared (position fallback for pre-launchId caches; -1 if none).
+         */
+        fun launchOptionIndexForExe(
+            appId: Int,
+            executable: String,
+        ): Int {
+            val launches = getAppInfoOf(appId)?.config?.launch ?: return -1
+            val exe = normalizeRelativeExe(executable)
+            val i =
+                launches.indexOfFirst {
+                    normalizeRelativeExe(it.executable).equals(exe, ignoreCase = true)
+                }
+            return launchOptionKeyAt(launches, i)
+        }
+
+        private fun launchOptionKeyAt(
+            launches: List<LaunchInfo>,
+            index: Int,
+        ): Int =
+            if (index < 0) {
+                -1
+            } else {
+                launches[index].launchId.takeIf { it >= 0 } ?: index
+            }
+
+        /**
+         * Arguments of the `config.launch` entry [launchKey] identifies — the args Steam itself
+         * would pass, so a relaunch can carry them too. Empty when the entry is unknown.
+         */
+        fun launchOptionArgsForKey(
+            appId: Int,
+            launchKey: Int,
+        ): String {
+            if (launchKey < 0) return ""
+            val launches = getAppInfoOf(appId)?.config?.launch ?: return ""
+            val entry =
+                launches.firstOrNull { it.launchId == launchKey }
+                    // Pre-launchId caches key by position; only trust that when no ids are present.
+                    ?: launches.getOrNull(launchKey)?.takeIf { it.launchId < 0 }
+            return entry?.arguments.orEmpty()
+        }
+
         fun getLaunchExecutable(
             appId: String,
             container: Container,
         ): String {
             val gameId = ContainerUtils.extractGameIdFromContainerId(appId)
             return container.executablePath.ifEmpty { getInstalledExe(gameId) }
+        }
+
+        private data class SteamShortcutHit(
+            val extras: Map<String, String>,
+            val container: Container,
+            val desktopFile: File,
+        )
+
+        /**
+         * Canonical shortcut for a Steam game: first match over ContainerManager's loaded
+         * containers, so the pick side and the launch side always resolve the same file —
+         * a raw home-dir scan also saw orphan/corrupt containers the launch never loads.
+         * Reads `[Extra Data]` straight from the .desktop; Shortcut construction decodes
+         * bitmaps, too heavy for read paths.
+         */
+        private fun readSteamShortcutExtras(
+            context: Context,
+            appId: Int,
+            manager: ContainerManager = ContainerManager(context),
+        ): SteamShortcutHit? {
+            val appIdStr = appId.toString()
+            for (container in manager.containers) {
+                val files = container.desktopDir.listFiles { f -> f.name.endsWith(".desktop") } ?: continue
+                for (file in files.sortedBy { it.name.lowercase() }) {
+                    // Shortcut owns the .desktop parse — same map the launch path sees via getExtra().
+                    val extras = Shortcut.parseExtras(file)
+                    if (extras["game_source"] == "STEAM" && extras["app_id"] == appIdStr) {
+                        return SteamShortcutHit(extras, container, file)
+                    }
+                }
+            }
+            return null
+        }
+
+        /** Constructs just the canonical shortcut — loadShortcuts() would decode every shortcut's icon. */
+        fun locateSteamShortcut(
+            context: Context,
+            appId: Int,
+            manager: ContainerManager = ContainerManager(context),
+        ): Shortcut? {
+            val hit = readSteamShortcutExtras(context, appId, manager) ?: return null
+            return Shortcut(hit.container, hit.desktopFile)
+        }
+
+        /** Exe path normalized ('/' separators, drive prefix stripped) — the one normalizer for exe compares. */
+        @JvmStatic
+        fun normalizeRelativeExe(path: String): String {
+            val n = path.replace('\\', '/').trim().trimStart('/')
+            val hasDrive = n.length > 2 && (n[0] in 'A'..'Z' || n[0] in 'a'..'z') && n[1] == ':' && n[2] == '/'
+            return if (hasDrive) n.substring(3) else n
+        }
+
+        /**
+         * Persists the pick on the shortcut; Steam's default entry clears the args
+         * override so launch returns to LaunchApp. Call on IO dispatcher.
+         */
+        fun setSelectedLaunchOption(
+            context: Context,
+            appId: Int,
+            executable: String,
+            arguments: String,
+        ): Boolean {
+            var shortcut = locateSteamShortcut(context, appId)
+            if (shortcut == null) {
+                // Installs from older builds may predate shortcut creation on download.
+                createSteamShortcut(context, appId)
+                shortcut = locateSteamShortcut(context, appId)
+            }
+            if (shortcut == null) {
+                Timber.w("setSelectedLaunchOption: no shortcut for appId=$appId")
+                return false
+            }
+            val default = getWindowsLaunchInfos(appId).firstOrNull()
+            val isDefault =
+                default != null &&
+                    normalizeRelativeExe(executable).equals(normalizeRelativeExe(default.executable), ignoreCase = true) &&
+                    arguments.trim() == default.arguments.trim()
+            shortcut.putExtra("launch_exe_path", executable)
+            shortcut.putExtra("launch_exe_args", if (isDefault) null else arguments.ifBlank { null })
+            // Explicit picker selection, stored verbatim — display state, separate from the
+            // launch-side extras above. A manual exe change removes these keys (option off).
+            shortcut.putExtra("launch_option_exe", executable)
+            shortcut.putExtra("launch_option_args", arguments)
+            shortcut.saveData()
+            // No container write here: Container.saveData() would clobber dxwrapperConfig (DXVK/VKD3D).
+            return true
+        }
+
+        /**
+         * The active option as (executable, arguments): the explicit pick, or the default while
+         * untouched; null once a manual exe change turned options off. Call on IO dispatcher.
+         */
+        fun getSelectedLaunchOption(
+            context: Context,
+            appId: Int,
+        ): Pair<String, String>? {
+            val extras = runCatching { readSteamShortcutExtras(context, appId) }.getOrNull()?.extras.orEmpty()
+            val picked = extras["launch_option_exe"]
+            if (picked != null) {
+                return if (picked.isBlank()) null else picked to extras["launch_option_args"].orEmpty()
+            }
+            val default = getWindowsLaunchInfos(appId).firstOrNull() ?: return null
+            val exePath = extras["launch_exe_path"].orEmpty()
+            val untouched =
+                exePath.isBlank() ||
+                    normalizeRelativeExe(exePath).equals(normalizeRelativeExe(default.executable), ignoreCase = true)
+            return if (untouched) default.executable to default.arguments else null
+        }
+
+        /** True when [relativePath] is a file under [baseDirPath], matching segments case-insensitively. */
+        fun fileExistsIgnoreCase(
+            baseDirPath: String,
+            relativePath: String,
+        ): Boolean = resolvePathCaseInsensitive(baseDirPath, relativePath)?.isFile == true
+
+        /** Re-fetches one app's PICS appinfo to heal cached rows predating newly parsed fields. */
+        suspend fun refreshAppInfoFromPics(appId: Int): Boolean {
+            val fresh =
+                try {
+                    fetchLatestSteamAppInfo(appId)
+                } catch (e: Exception) {
+                    Timber.w(e, "refreshAppInfoFromPics failed for appId=$appId")
+                    null
+                } ?: return false
+            persistLatestSteamAppInfo(appId, fresh)
+            return true
         }
 
         suspend fun deleteApp(appId: Int): Boolean =
@@ -1831,7 +2022,7 @@ class SteamService : Service() {
                 ?.let { appInfo ->
                     appInfo.config.launch.filter { launchInfo ->
                         // since configOS was unreliable and configArch was even more unreliable
-                        launchInfo.executable.endsWith(".exe")
+                        launchInfo.executable.endsWith(".exe", ignoreCase = true)
                     }
                 }.orEmpty()
 
