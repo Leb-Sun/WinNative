@@ -75,6 +75,9 @@ pub struct FriendPersonaSnapshot {
     pub rich_presence: Vec<(String, String)>,
     pub game_name: String,
     pub gameid: u64,
+    pub game_lobby_id: u64,
+    pub game_server_ip: u32,
+    pub game_server_port: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1437,6 +1440,15 @@ impl CMClientCore {
                                 if !friend.rich_presence.is_empty() {
                                     existing.rich_presence = friend.rich_presence;
                                 }
+                                if friend.game_lobby_id.is_some() {
+                                    existing.game_lobby_id = friend.game_lobby_id;
+                                }
+                                if friend.game_server_ip.is_some() {
+                                    existing.game_server_ip = friend.game_server_ip;
+                                }
+                                if friend.game_server_port.is_some() {
+                                    existing.game_server_port = friend.game_server_port;
+                                }
                             }
                             None => *self_persona = Some(friend),
                         }
@@ -1448,6 +1460,14 @@ impl CMClientCore {
                         }
                         if friend.has_persona_state {
                             slot.persona_state = friend.persona_state;
+                        }
+                        // Rich presence and lobby id have no "cleared" wire form, so without this a
+                        // friend who switches games keeps the old game's join data.
+                        if friend.has_game && friend.game_played_app_id != slot.game_played_app_id {
+                            slot.rich_presence.clear();
+                            slot.game_lobby_id = 0;
+                            slot.game_server_ip = 0;
+                            slot.game_server_port = 0;
                         }
                         if friend.has_game {
                             slot.game_played_app_id = friend.game_played_app_id;
@@ -1463,6 +1483,15 @@ impl CMClientCore {
                         }
                         if !friend.rich_presence.is_empty() {
                             slot.rich_presence = friend.rich_presence;
+                        }
+                        if let Some(lobby) = friend.game_lobby_id {
+                            slot.game_lobby_id = lobby;
+                        }
+                        if let Some(ip) = friend.game_server_ip {
+                            slot.game_server_ip = ip;
+                        }
+                        if let Some(port) = friend.game_server_port {
+                            slot.game_server_port = port;
                         }
                     }
                 }
@@ -1951,6 +1980,101 @@ mod tests {
         assert_eq!(persona.player_name, "Grace");
         assert_eq!(persona.avatar_hash, [9, 9]);
         assert_eq!(persona.persona_state, 2);
+    }
+
+    #[test]
+    fn persona_lobby_survives_partial_update_and_clears_on_explicit_zero() {
+        let core = logged_on_core();
+        let push = |body: Vec<u8>| {
+            let mut wrapped = Vec::new();
+            Writer::new(&mut wrapped).submessage_field(2, &body);
+            core.route_inbound(
+                EMsg::CLIENT_PERSONA_STATE,
+                &CMsgProtoBufHeader::default(),
+                &wrapped,
+            );
+        };
+
+        let mut joined = Vec::new();
+        {
+            let mut w = Writer::new(&mut joined);
+            w.fixed64_field(1, 444);
+            w.string_field(15, "Grace");
+            w.uint32_field(3, 3527290);
+            w.fixed64_field(73, 109775241234567890);
+        }
+        push(joined);
+        assert_eq!(
+            core.friend_personas().pop().unwrap().game_lobby_id,
+            109775241234567890
+        );
+
+        let mut partial = Vec::new();
+        {
+            let mut w = Writer::new(&mut partial);
+            w.fixed64_field(1, 444);
+            w.uint32_field(2, 1);
+        }
+        push(partial);
+        assert_eq!(
+            core.friend_personas().pop().unwrap().game_lobby_id,
+            109775241234567890,
+            "an absent lobby field must not clear the stored lobby"
+        );
+
+        let mut left = Vec::new();
+        {
+            let mut w = Writer::new(&mut left);
+            w.fixed64_field(1, 444);
+            w.tag(73, WireType::Fixed64);
+            w.raw_bytes(&0u64.to_le_bytes());
+        }
+        push(left);
+        assert_eq!(core.friend_personas().pop().unwrap().game_lobby_id, 0);
+    }
+
+    #[test]
+    fn switching_games_drops_the_previous_games_join_data() {
+        let core = logged_on_core();
+        let push = |body: Vec<u8>| {
+            let mut wrapped = Vec::new();
+            Writer::new(&mut wrapped).submessage_field(2, &body);
+            core.route_inbound(
+                EMsg::CLIENT_PERSONA_STATE,
+                &CMsgProtoBufHeader::default(),
+                &wrapped,
+            );
+        };
+
+        let mut kv = Vec::new();
+        {
+            let mut w = Writer::new(&mut kv);
+            w.string_field(1, "connect");
+            w.string_field(2, "+connect 1.2.3.4:27015");
+        }
+        let mut in_peak = Vec::new();
+        {
+            let mut w = Writer::new(&mut in_peak);
+            w.fixed64_field(1, 444);
+            w.string_field(15, "Grace");
+            w.uint32_field(3, 3527290);
+            w.submessage_field(71, &kv);
+            w.fixed64_field(73, 109775241234567890);
+        }
+        push(in_peak);
+
+        let mut switched = Vec::new();
+        {
+            let mut w = Writer::new(&mut switched);
+            w.fixed64_field(1, 444);
+            w.uint32_field(3, 440);
+        }
+        push(switched);
+
+        let persona = core.friend_personas().pop().unwrap();
+        assert_eq!(persona.game_played_app_id, 440);
+        assert!(persona.rich_presence.is_empty());
+        assert_eq!(persona.game_lobby_id, 0);
     }
 
     #[test]
