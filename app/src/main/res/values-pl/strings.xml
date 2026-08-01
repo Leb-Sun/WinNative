@@ -113,6 +113,17 @@
     <string name="store_game_update_check_failed">Nie udało się sprawdzić aktualizacji</string>
     <string name="store_game_update">Aktualizuj</string>
     <string name="store_game_workshop">Workshop</string>
+    <string name="store_game_beta_branch">Gałąź beta</string>
+    <string name="store_game_beta_branch_failed">Nie można zapisać gałęzi beta</string>
+    <plurals name="store_game_beta_branch_count">
+        <item quantity="one">%1$d gałąź</item>
+        <item quantity="few">%1$d gałęzie</item>
+        <item quantity="many">%1$d gałęzi</item>
+        <item quantity="other">%1$d gałęzi</item>
+    </plurals>
+    <string name="store_game_beta_branch_default">%1$s  (domyślna)</string>
+    <string name="store_game_beta_branch_build">kompilacja %1$d  ·  %2$s</string>
+    <string name="store_game_beta_branch_locked">Wymagane hasło</string>
     <string name="store_game_verify_files">Zweryfikuj pliki</string>
     <string name="store_game_verify_started">Weryfikowanie %1$s — sprawdź kartę Pobrane</string>
     <string name="store_game_steam_options">Opcje Steam</string>

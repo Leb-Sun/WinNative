@@ -117,6 +117,15 @@
     <string name="store_game_update_check_failed">Päivitysten tarkistus epäonnistui</string>
     <string name="store_game_update">Päivitä</string>
     <string name="store_game_workshop">Workshop</string>
+    <string name="store_game_beta_branch">Beetahaara</string>
+    <string name="store_game_beta_branch_failed">Beetahaaran tallennus epäonnistui</string>
+    <plurals name="store_game_beta_branch_count">
+        <item quantity="one">%1$d haara</item>
+        <item quantity="other">%1$d haaraa</item>
+    </plurals>
+    <string name="store_game_beta_branch_default">%1$s  (oletus)</string>
+    <string name="store_game_beta_branch_build">koontiversio %1$d  ·  %2$s</string>
+    <string name="store_game_beta_branch_locked">Vaatii salasanan</string>
     <string name="store_game_verify_files">Tarkista tiedostot</string>
     <string name="store_game_verify_started">Tarkistetaan %1$s — katso Lataukset-välilehteä</string>
     <string name="store_game_steam_options">Steam-asetukset</string>

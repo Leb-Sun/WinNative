@@ -118,6 +118,15 @@
     <string name="store_game_update_check_failed">Update check failed</string>
     <string name="store_game_update">Update</string>
     <string name="store_game_workshop">Workshop</string>
+    <string name="store_game_beta_branch">Beta Branch</string>
+    <string name="store_game_beta_branch_failed">Couldn\'t save beta branch</string>
+    <plurals name="store_game_beta_branch_count">
+        <item quantity="one">%1$d branch</item>
+        <item quantity="other">%1$d branches</item>
+    </plurals>
+    <string name="store_game_beta_branch_default">%1$s  (default)</string>
+    <string name="store_game_beta_branch_build">build %1$d  ·  %2$s</string>
+    <string name="store_game_beta_branch_locked">Password required</string>
     <string name="store_game_verify_files">Verify Files</string>
     <string name="store_game_verify_started">Verifying %1$s — check the Downloads tab</string>
     <string name="store_game_steam_options">Steam options</string>

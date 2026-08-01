@@ -117,6 +117,15 @@
     <string name="store_game_update_check_failed">Error al buscar actualizaciones</string>
     <string name="store_game_update">Actualizar</string>
     <string name="store_game_workshop">Workshop</string>
+    <string name="store_game_beta_branch">Rama beta</string>
+    <string name="store_game_beta_branch_failed">No se pudo guardar la rama beta</string>
+    <plurals name="store_game_beta_branch_count">
+        <item quantity="one">%1$d rama</item>
+        <item quantity="other">%1$d ramas</item>
+    </plurals>
+    <string name="store_game_beta_branch_default">%1$s  (predeterminada)</string>
+    <string name="store_game_beta_branch_build">compilación %1$d  ·  %2$s</string>
+    <string name="store_game_beta_branch_locked">Requiere contraseña</string>
     <string name="store_game_verify_files">Verificar archivos</string>
     <string name="store_game_verify_started">Verificando %1$s — revisa la pestaña Descargas</string>
     <string name="store_game_steam_options">Opciones de Steam</string>

@@ -479,6 +479,7 @@ internal suspend fun SteamService.Companion.completeAppDownload(
             runCatching { MarkerUtils.removeMarker(appDirPath, Marker.STEAM_DRM_UNPACK_CHECKED) }
 
             pruneStaleDepotManifestCache(appDirPath)
+            persistInstalledBranchName(downloadInfo.gameId, appDirPath)
 
             // Same reason as above: a Room exception here used to FAIL a fully-downloaded game with the COMPLETE marker already on disk.
             val mainAppId = downloadInfo.gameId
@@ -526,6 +527,9 @@ internal suspend fun SteamService.Companion.completeAppDownload(
         val service = instance
         if (service != null) {
             createSteamShortcut(service, downloadInfo.gameId)
+            // The shortcut exists now, so a branch picked before installing can
+            // finally be written to it.
+            commitPendingPreInstallBranch(service, downloadInfo.gameId)
         }
 
         // Mark inactive BEFORE updating status so checkQueue() frees this slot — else isActive() stays true and blocks the queue until manually cleared.

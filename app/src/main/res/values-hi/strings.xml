@@ -116,6 +116,15 @@
     <string name="store_game_update_check_failed">अपडेट जाँच विफल रही</string>
     <string name="store_game_update">अपडेट</string>
     <string name="store_game_workshop">वर्कशॉप</string>
+    <string name="store_game_beta_branch">बीटा ब्रांच</string>
+    <string name="store_game_beta_branch_failed">बीटा ब्रांच सहेजी नहीं जा सकी</string>
+    <plurals name="store_game_beta_branch_count">
+        <item quantity="one">%1$d ब्रांच</item>
+        <item quantity="other">%1$d ब्रांच</item>
+    </plurals>
+    <string name="store_game_beta_branch_default">%1$s  (डिफ़ॉल्ट)</string>
+    <string name="store_game_beta_branch_build">बिल्ड %1$d  ·  %2$s</string>
+    <string name="store_game_beta_branch_locked">पासवर्ड आवश्यक</string>
     <string name="store_game_verify_files">फ़ाइलें सत्यापित करें</string>
     <string name="store_game_verify_started">%1$s का सत्यापन - डाउनलोड टैब की जाँच करें</string>
     <string name="store_game_steam_options">Steam विकल्प</string>

@@ -116,6 +116,17 @@
     <string name="store_game_update_check_failed">Не удалось проверить обновления</string>
     <string name="store_game_update">Обновить</string>
     <string name="store_game_workshop">Мастерская</string>
+    <string name="store_game_beta_branch">Бета-ветка</string>
+    <string name="store_game_beta_branch_failed">Не удалось сохранить бета-ветку</string>
+    <plurals name="store_game_beta_branch_count">
+        <item quantity="one">%1$d ветка</item>
+        <item quantity="few">%1$d ветки</item>
+        <item quantity="many">%1$d веток</item>
+        <item quantity="other">%1$d веток</item>
+    </plurals>
+    <string name="store_game_beta_branch_default">%1$s  (по умолчанию)</string>
+    <string name="store_game_beta_branch_build">сборка %1$d  ·  %2$s</string>
+    <string name="store_game_beta_branch_locked">Требуется пароль</string>
     <string name="store_game_verify_files">Проверить файлы</string>
     <string name="store_game_verify_started">Проверка %1$s — смотрите вкладку «Загрузки».</string>
     <string name="store_game_steam_options">Параметры Steam</string>

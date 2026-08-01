@@ -113,6 +113,14 @@
     <string name="store_game_update_check_failed">업데이트 확인 실패</string>
     <string name="store_game_update">업데이트</string>
     <string name="store_game_workshop">창작마당</string>
+    <string name="store_game_beta_branch">베타 브랜치</string>
+    <string name="store_game_beta_branch_failed">베타 브랜치를 저장하지 못했습니다</string>
+    <plurals name="store_game_beta_branch_count">
+        <item quantity="other">브랜치 %1$d개</item>
+    </plurals>
+    <string name="store_game_beta_branch_default">%1$s  (기본값)</string>
+    <string name="store_game_beta_branch_build">빌드 %1$d  ·  %2$s</string>
+    <string name="store_game_beta_branch_locked">비밀번호 필요</string>
     <string name="store_game_verify_files">파일 확인</string>
     <string name="store_game_verify_started">%1$s 확인 중 — 다운로드 탭을 확인하세요</string>
     <string name="store_game_steam_options">Steam 옵션</string>

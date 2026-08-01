@@ -887,7 +887,7 @@ object SteamUtils {
             }
             val gameName = gameDir.name
             val sizeOnDisk = calculateDirectorySize(gameDir)
-            val selectedBranch = SteamService.resolveSelectedBetaName(steamAppId).ifBlank { "public" }
+            val selectedBranch = SteamService.healSelectedBetaBranch(steamAppId).ifBlank { "public" }
             val ownerSteamId = PrefManager.steamUserSteamId64.takeIf { it > 0L }?.toString() ?: "0"
 
             // Create symlink from Steam common directory to actual game directory
@@ -1302,13 +1302,18 @@ object SteamUtils {
             val hiddenDlcApps = SteamService.getHiddenDlcAppsOf(appId)
             val appendedDlcIds = mutableListOf<Int>()
 
+            // Heal before writing: this function overwrites configs.app.ini, which is
+            // one of the heal's own evidence sources.
+            val selectedBranch = SteamService.healSelectedBetaBranch(appId).ifBlank { "public" }
             val appIniContent =
                 buildString {
-                    // [app::general] — make Steam_Apps::GetCurrentBetaName()
-                    // deterministic; WinNative always installs the public branch.
+                    // [app::general] — tells gbe_fork the active branch so
+                    // GetCurrentBetaName() and GetAppBuildId() answer correctly.
                     appendLine("[app::general]")
-                    appendLine("is_beta_branch=0")
-                    appendLine("branch_name=public")
+                    appendLine(
+                        "is_beta_branch=${if (selectedBranch.equals("public", ignoreCase = true)) 0 else 1}",
+                    )
+                    appendLine("branch_name=$selectedBranch")
                     appendLine()
                     appendLine("[app::dlcs]")
                     appendLine("unlock_all=0")

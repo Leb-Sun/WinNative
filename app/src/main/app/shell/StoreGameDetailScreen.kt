@@ -45,6 +45,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.AltRoute
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.FactCheck
 import androidx.compose.material.icons.outlined.ArrowDropDown
@@ -169,6 +170,9 @@ internal fun StoreGameDetailScreen(
     onCustomPath: () -> Unit = {},
     onToggleDlc: (Int) -> Unit = {},
     onToggleSelectAllDlcs: () -> Unit = {},
+    // Nullable rather than a show-flag + callback pair: one fewer parameter on a
+    // signature whose default-argument handler has hit ART verifier limits before.
+    onBetaBranches: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -202,7 +206,9 @@ internal fun StoreGameDetailScreen(
         val showUpdateCta = updateCheckAvailable && isUpdateAvailable
         val verifyFilesAvailable = showVerifyFiles && isInstalled
         val workshopAvailable = showWorkshop && isInstalled
-        val sourceMenuEnabled = updateCheckAvailable || verifyFilesAvailable || workshopAvailable
+        val betaBranchesAvailable = onBetaBranches != null && isInstalled
+        val sourceMenuEnabled =
+            updateCheckAvailable || verifyFilesAvailable || workshopAvailable || betaBranchesAvailable
         val showDlcCard = dlcs.isNotEmpty()
         val showActionColumn =
             showDownloadCta || showUpdateCta ||
@@ -323,6 +329,7 @@ internal fun StoreGameDetailScreen(
                 onVerifyFiles = onVerifyFiles,
                 onCheckForUpdate = onCheckForUpdate,
                 onWorkshop = onWorkshop,
+                onBetaBranches = if (betaBranchesAvailable) onBetaBranches else null,
             )
         }
 
@@ -527,17 +534,79 @@ internal fun StoreGameDetailScreen(
                             }
 
                             if (showDownloadCta) {
-                                StoreCtaButton(
-                                    height = ctaHeight,
-                                    icon = Icons.Outlined.Download,
-                                    label = stringResource(R.string.common_ui_download),
-                                    enabled = !isLoading && isDownloadActionEnabled,
-                                    loading = isLoading,
-                                    onClick = onInstall,
-                                    isEntry = true,
-                                    navRow = 1,
-                                    navCol = 4,
-                                )
+                                if (onBetaBranches != null && !isInstalled) {
+                                    // Pre-install: a beta-branch segment "sliced off" the
+                                    // Download pill. Each segment paints only its slice of
+                                    // one gradient spanning the row, so the pair still reads
+                                    // as the single Download pill.
+                                    var splitCtaWidthPx by remember { mutableIntStateOf(0) }
+                                    val splitCtaLeadPx =
+                                        with(LocalDensity.current) {
+                                            (actionIconSize + actionIconSpacing).toPx()
+                                        }
+                                    Row(
+                                        modifier =
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .onSizeChanged { splitCtaWidthPx = it.width },
+                                        horizontalArrangement = Arrangement.spacedBy(actionIconSpacing),
+                                    ) {
+                                        StoreCtaCutoutButton(
+                                            height = ctaHeight,
+                                            icon = Icons.AutoMirrored.Outlined.AltRoute,
+                                            contentDescription = stringResource(R.string.store_game_beta_branch),
+                                            // Same gate as Download: don't stage picks the
+                                            // blocked download can't honor.
+                                            enabled = !isLoading && isDownloadActionEnabled,
+                                            shape =
+                                                RoundedCornerShape(
+                                                    topStart = 14.dp,
+                                                    bottomStart = 14.dp,
+                                                    topEnd = 4.dp,
+                                                    bottomEnd = 4.dp,
+                                                ),
+                                            onClick = onBetaBranches,
+                                            modifier = Modifier.width(actionIconSize),
+                                            navRow = 1,
+                                            navCol = 3,
+                                            fillEndX =
+                                                splitCtaWidthPx.takeIf { it > 0 }?.toFloat()
+                                                    ?: Float.POSITIVE_INFINITY,
+                                        )
+                                        StoreCtaButton(
+                                            height = ctaHeight,
+                                            icon = Icons.Outlined.Download,
+                                            label = stringResource(R.string.common_ui_download),
+                                            enabled = !isLoading && isDownloadActionEnabled,
+                                            loading = isLoading,
+                                            onClick = onInstall,
+                                            isEntry = true,
+                                            navRow = 1,
+                                            navCol = 4,
+                                            modifier = Modifier.weight(1f),
+                                            shape =
+                                                RoundedCornerShape(
+                                                    topStart = 4.dp,
+                                                    bottomStart = 4.dp,
+                                                    topEnd = 14.dp,
+                                                    bottomEnd = 14.dp,
+                                                ),
+                                            fillStartX = -splitCtaLeadPx,
+                                        )
+                                    }
+                                } else {
+                                    StoreCtaButton(
+                                        height = ctaHeight,
+                                        icon = Icons.Outlined.Download,
+                                        label = stringResource(R.string.common_ui_download),
+                                        enabled = !isLoading && isDownloadActionEnabled,
+                                        loading = isLoading,
+                                        onClick = onInstall,
+                                        isEntry = true,
+                                        navRow = 1,
+                                        navCol = 4,
+                                    )
+                                }
                             }
                         }
                     }
@@ -830,6 +899,7 @@ private fun StoreSourceTag(
     onVerifyFiles: () -> Unit = {},
     onCheckForUpdate: () -> Unit = {},
     onWorkshop: () -> Unit = {},
+    onBetaBranches: (() -> Unit)? = null,
 ) {
     var anchorHeightPx by remember { mutableIntStateOf(0) }
     Box {
@@ -912,6 +982,13 @@ private fun StoreSourceTag(
                             label = stringResource(R.string.store_game_workshop),
                             enabled = areSteamActionsEnabled,
                         ) { onMenuOpenChange(false); onWorkshop() }
+                    }
+                    if (onBetaBranches != null) {
+                        StoreSourceMenuItem(
+                            icon = Icons.AutoMirrored.Outlined.AltRoute,
+                            label = stringResource(R.string.store_game_beta_branch),
+                            enabled = areSteamActionsEnabled,
+                        ) { onMenuOpenChange(false); onBetaBranches() }
                     }
                 }
             }
@@ -1082,6 +1159,77 @@ private fun StoreActionChip(
     }
 }
 
+/** Glass-look brushes shared by StoreCtaButton and StoreCtaCutoutButton. */
+private class StoreCtaGlass(
+    val fill: Brush,
+    val sheen: Brush,
+    val rim: Brush,
+)
+
+/**
+ * [fillStartX]/[fillEndX] let two adjacent segments each paint their own slice of
+ * one gradient spanning both, so a split pill still reads as a single control.
+ */
+private fun storeCtaGlassBrushes(
+    enabled: Boolean,
+    flare: Float,
+    fillStartX: Float = 0f,
+    fillEndX: Float = Float.POSITIVE_INFINITY,
+): StoreCtaGlass =
+    StoreCtaGlass(
+        fill =
+            if (enabled) {
+                Brush.horizontalGradient(
+                    colors =
+                        listOf(
+                            Color(0xFF00B4D8).copy(alpha = 0.38f),
+                            StoreAccent.copy(alpha = 0.38f),
+                            Color(0xFF7B2FF7).copy(alpha = 0.38f),
+                        ),
+                    startX = fillStartX,
+                    endX = fillEndX,
+                )
+            } else {
+                Brush.horizontalGradient(
+                    colors =
+                        listOf(
+                            Color(0xFF3A3A4A).copy(alpha = 0.35f),
+                            Color(0xFF2A2A36).copy(alpha = 0.35f),
+                        ),
+                    startX = fillStartX,
+                    endX = fillEndX,
+                )
+            },
+        sheen =
+            if (enabled) {
+                Brush.verticalGradient(
+                    0.00f to Color.White.copy(alpha = 0.28f),
+                    0.35f to Color.White.copy(alpha = 0.06f),
+                    0.55f to Color.Transparent,
+                    1.00f to Color.Black.copy(alpha = 0.12f),
+                )
+            } else {
+                Brush.verticalGradient(
+                    0.0f to Color.White.copy(alpha = 0.10f),
+                    0.6f to Color.Transparent,
+                    1.0f to Color.Black.copy(alpha = 0.08f),
+                )
+            },
+        rim =
+            if (enabled) {
+                Brush.verticalGradient(
+                    0.0f to Color.White.copy(alpha = 0.55f + 0.35f * flare),
+                    0.5f to Color.White.copy(alpha = 0.08f + 0.18f * flare),
+                    1.0f to Color.White.copy(alpha = 0.22f + 0.22f * flare),
+                )
+            } else {
+                Brush.verticalGradient(
+                    0.0f to Color.White.copy(alpha = 0.16f),
+                    1.0f to Color.White.copy(alpha = 0.04f),
+                )
+            },
+    )
+
 @Composable
 private fun StoreCtaButton(
     height: Dp,
@@ -1093,6 +1241,10 @@ private fun StoreCtaButton(
     isEntry: Boolean = false,
     navRow: Int? = null,
     navCol: Int? = null,
+    modifier: Modifier = Modifier.fillMaxWidth(),
+    shape: RoundedCornerShape = RoundedCornerShape(14.dp),
+    fillStartX: Float = 0f,
+    fillEndX: Float = Float.POSITIVE_INFINITY,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
@@ -1106,56 +1258,10 @@ private fun StoreCtaButton(
         animationSpec = spring(dampingRatio = 0.6f, stiffness = 500f),
         label = "storeCtaFlare",
     )
-    val shape = remember { RoundedCornerShape(14.dp) }
-    val activeBrush =
-        Brush.horizontalGradient(
-            colors =
-                listOf(
-                    Color(0xFF00B4D8).copy(alpha = 0.38f),
-                    StoreAccent.copy(alpha = 0.38f),
-                    Color(0xFF7B2FF7).copy(alpha = 0.38f),
-                ),
-        )
-    val disabledBrush =
-        Brush.horizontalGradient(
-            colors =
-                listOf(
-                    Color(0xFF3A3A4A).copy(alpha = 0.35f),
-                    Color(0xFF2A2A36).copy(alpha = 0.35f),
-                ),
-        )
-    val glassSheenBrush =
-        if (enabled) {
-            Brush.verticalGradient(
-                0.00f to Color.White.copy(alpha = 0.28f),
-                0.35f to Color.White.copy(alpha = 0.06f),
-                0.55f to Color.Transparent,
-                1.00f to Color.Black.copy(alpha = 0.12f),
-            )
-        } else {
-            Brush.verticalGradient(
-                0.0f to Color.White.copy(alpha = 0.10f),
-                0.6f to Color.Transparent,
-                1.0f to Color.Black.copy(alpha = 0.08f),
-            )
-        }
-    val glassRimBrush =
-        if (enabled) {
-            Brush.verticalGradient(
-                0.0f to Color.White.copy(alpha = 0.55f + 0.35f * flare),
-                0.5f to Color.White.copy(alpha = 0.08f + 0.18f * flare),
-                1.0f to Color.White.copy(alpha = 0.22f + 0.22f * flare),
-            )
-        } else {
-            Brush.verticalGradient(
-                0.0f to Color.White.copy(alpha = 0.16f),
-                1.0f to Color.White.copy(alpha = 0.04f),
-            )
-        }
+    val glass = storeCtaGlassBrushes(enabled, flare, fillStartX, fillEndX)
     Box(
         modifier =
-            Modifier
-                .fillMaxWidth()
+            modifier
                 .height(height)
                 .graphicsLayer {
                     scaleX = scale
@@ -1168,9 +1274,9 @@ private fun StoreCtaButton(
                     navRow = navRow,
                     navCol = navCol,
                 )
-                .background(if (enabled) activeBrush else disabledBrush)
-                .background(glassSheenBrush)
-                .border(1.dp, glassRimBrush, shape)
+                .background(glass.fill)
+                .background(glass.sheen)
+                .border(1.dp, glass.rim, shape)
                 .clickable(
                     interactionSource = interactionSource,
                     indication = null,
@@ -1205,6 +1311,70 @@ private fun StoreCtaButton(
                 )
             }
         }
+    }
+}
+
+/**
+ * The small segment "sliced off" the Download pill: same glass look, icon only.
+ * Opens the beta-branch picker before a download is committed.
+ */
+@Composable
+private fun StoreCtaCutoutButton(
+    height: Dp,
+    icon: ImageVector,
+    contentDescription: String,
+    enabled: Boolean,
+    shape: RoundedCornerShape,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    navRow: Int? = null,
+    navCol: Int? = null,
+    fillStartX: Float = 0f,
+    fillEndX: Float = Float.POSITIVE_INFINITY,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed && enabled) 0.96f else 1f,
+        animationSpec = spring(dampingRatio = 0.5f, stiffness = 600f),
+        label = "storeCtaCutoutScale",
+    )
+    val flare by animateFloatAsState(
+        targetValue = if (isPressed && enabled) 1f else 0f,
+        animationSpec = spring(dampingRatio = 0.6f, stiffness = 500f),
+        label = "storeCtaCutoutFlare",
+    )
+    val glass = storeCtaGlassBrushes(enabled, flare, fillStartX, fillEndX)
+    Box(
+        modifier =
+            modifier
+                .height(height)
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                }.clip(shape)
+                .paneNavItem(
+                    cornerRadius = 14.dp,
+                    onActivate = { if (enabled) onClick() },
+                    navRow = navRow,
+                    navCol = navCol,
+                )
+                .background(glass.fill)
+                .background(glass.sheen)
+                .border(1.dp, glass.rim, shape)
+                .clickable(
+                    interactionSource = interactionSource,
+                    indication = null,
+                    onClick = { if (enabled) onClick() },
+                ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            icon,
+            contentDescription = contentDescription,
+            modifier = Modifier.size(24.dp),
+            tint = Color.White,
+        )
     }
 }
 

@@ -113,6 +113,15 @@
     <string name="store_game_update_check_failed">Falha ao verificar atualização</string>
     <string name="store_game_update">Atualizar</string>
     <string name="store_game_workshop">Workshop</string>
+    <string name="store_game_beta_branch">Ramo beta</string>
+    <string name="store_game_beta_branch_failed">Não foi possível salvar o ramo beta</string>
+    <plurals name="store_game_beta_branch_count">
+        <item quantity="one">%1$d ramo</item>
+        <item quantity="other">%1$d ramos</item>
+    </plurals>
+    <string name="store_game_beta_branch_default">%1$s  (padrão)</string>
+    <string name="store_game_beta_branch_build">build %1$d  ·  %2$s</string>
+    <string name="store_game_beta_branch_locked">Senha necessária</string>
     <string name="store_game_verify_files">Verificar arquivos</string>
     <string name="store_game_verify_started">Verificando %1$s — confira a aba Downloads</string>
     <string name="store_game_steam_options">Opções do Steam</string>

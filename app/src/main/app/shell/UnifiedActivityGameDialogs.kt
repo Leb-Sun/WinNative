@@ -1693,11 +1693,22 @@ internal fun UnifiedActivity.LibraryGameDetailDialog(
     var shortcutRefreshKey by remember(app.id, gogGame?.id) { mutableStateOf(0) }
     var pinnedShortcutOverride by remember(app.id, gogGame?.id) { mutableStateOf<Boolean?>(null) }
     var showWorkshopDialog by remember(app.id) { mutableStateOf(false) }
+    var showBetaBranchesDialog by remember(app.id) { mutableStateOf(false) }
+    var betaBranches by remember(app.id) { mutableStateOf<List<StoreBetaBranchItem>>(emptyList()) }
+    var selectedBetaBranch by remember(app.id) { mutableStateOf<StoreBetaBranchItem?>(null) }
 
     val isCustom = app.id < 0
     val isEpic = app.id >= 2000000000
     val isGog = gogGame != null
     val epicId = if (isEpic) app.id - 2000000000 else 0
+
+    LaunchedEffect(app.id, isCustom, isEpic, isGog) {
+        if (isCustom || isEpic || isGog) return@LaunchedEffect
+        loadSteamBetaBranches(app.id) { branches, selected ->
+            betaBranches = branches
+            selectedBetaBranch = selected
+        }
+    }
 
     val libraryDownloadRecords by com.winlator.cmod.app.service.download.DownloadCoordinator.records.collectAsState(
         initial = com.winlator.cmod.app.service.download.DownloadCoordinator.snapshotRecords(),
@@ -2701,6 +2712,12 @@ internal fun UnifiedActivity.LibraryGameDetailDialog(
                                     }
                                 },
                                 onWorkshop = { if (!isEpic && !isGog && !isCustom) showWorkshopDialog = true },
+                                onBetaBranches =
+                                    if (betaBranches.size >= 2) {
+                                        { showBetaBranchesDialog = true }
+                                    } else {
+                                        null
+                                    },
                             )
 
                             when (heroPopup) {
@@ -3161,6 +3178,22 @@ internal fun UnifiedActivity.LibraryGameDetailDialog(
                     appId = app.id,
                     gameTitle = app.name,
                     onDismissRequest = { showWorkshopDialog = false },
+                )
+            }
+
+            if (showBetaBranchesDialog) {
+                BetaBranchesDialog(
+                    gameTitle = app.name,
+                    branches = betaBranches,
+                    selectedBranch = selectedBetaBranch,
+                    onSelect = { item ->
+                        showBetaBranchesDialog = false
+                        persistSteamBetaBranchSelection(app.id, item, scope) { saved ->
+                            selectedBetaBranch = saved
+                            startUpdateCheck(app.id, app.name)
+                        }
+                    },
+                    onDismissRequest = { showBetaBranchesDialog = false },
                 )
             }
         }
