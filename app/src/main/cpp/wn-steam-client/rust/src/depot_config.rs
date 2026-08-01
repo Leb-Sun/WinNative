@@ -53,6 +53,13 @@ impl DepotConfigStore {
         self.installed.get(&depot_id).copied().unwrap_or(0)
     }
 
+    pub fn installed_entries(&self) -> Vec<(u32, u64)> {
+        self.installed
+            .iter()
+            .map(|(depot, manifest)| (*depot, *manifest))
+            .collect()
+    }
+
     pub fn is_installed(&self, depot_id: u32, manifest_id: u64) -> bool {
         self.installed
             .get(&depot_id)
@@ -206,7 +213,7 @@ fn get_u32(buf: &[u8]) -> Option<u32> {
     Some(u32::from_le_bytes(buf.get(..4)?.try_into().ok()?))
 }
 
-fn atomic_write_synced(final_path: &Path, bytes: &[u8]) -> bool {
+pub(crate) fn atomic_write_synced(final_path: &Path, bytes: &[u8]) -> bool {
     let Some(parent) = final_path.parent() else {
         return false;
     };
@@ -258,6 +265,22 @@ mod tests {
         assert_eq!(
             loaded.manifest_cache_path(100, 555),
             dir.join("100_555.manifest")
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn installed_entries_lists_every_depot() {
+        let dir = temp_dir("installed_entries");
+        let mut store = DepotConfigStore::load(&dir);
+        assert!(store.finish_depot(200, 777));
+        assert!(store.finish_depot(100, 555));
+
+        assert_eq!(store.installed_entries(), vec![(100, 555), (200, 777)]);
+        assert!(store.forget_depot(200));
+        assert_eq!(
+            DepotConfigStore::load(&dir).installed_entries(),
+            vec![(100, 555)]
         );
         let _ = fs::remove_dir_all(&dir);
     }

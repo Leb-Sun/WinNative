@@ -1070,7 +1070,7 @@ internal fun SteamService.Companion.downloadApp(
                                     java.util.concurrent.atomic.AtomicLong(wnDepotBytes.values.sum())
                                 // Throttle DownloadRecord progress persistence.
                                 val wnLastPersistMs = java.util.concurrent.atomic.AtomicLong(0L)
-                                for (batch in wnBatches) {
+                                for ((batchIndex, batch) in wnBatches.withIndex()) {
                                     val (batchAppId, batchDepotIds, batchManifestIds) = batch
                                     kotlinx.coroutines.suspendCancellableCoroutine<Unit> { cont ->
                                         wnSessionForDownload.downloadApp(
@@ -1083,6 +1083,9 @@ internal fun SteamService.Companion.downloadApp(
                                             caPath,
                                             // "Download Speed" setting → parallel chunk-download worker count.
                                             PrefManager.downloadSpeed,
+                                            // Sweep only after the last batch: the keep-union
+                                            // has to see every batch's depots.
+                                            batchIndex == wnBatches.lastIndex,
                                             object : WnDownloadListener {
                                                 override fun onProgress(
                                                     depotId: Int,
