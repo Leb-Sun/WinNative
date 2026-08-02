@@ -582,6 +582,50 @@ internal fun SteamService.Companion.readInstalledDepotManifestIds(appDirPath: St
         emptyMap()
     }
 
+/**
+ * Drops cached "{depotId}_{gid}.manifest" files (and their ".filelist" sidecars)
+ * for builds depot.config no longer lists. Manifests with a pending
+ * ".stalecleanup" marker are kept — the native stale-file pass still needs them
+ * to diff the old build away. Legacy installs with no depot.config are left
+ * alone, since checkForAppUpdate's cache fallback is their only version signal.
+ * Depots mid-download are skipped: their entry reads as INVALID, which would
+ * otherwise look like a mismatch and evict the manifest they are downloading.
+ */
+internal fun SteamService.Companion.pruneStaleDepotManifestCache(appDirPath: String) {
+    runCatching {
+        val installedManifests = readInstalledDepotManifestIds(appDirPath)
+        if (installedManifests.isEmpty()) return
+        val inProgressDepots = installedManifests.filterValues { it == Long.MAX_VALUE }.keys
+        val depotDownloaderDir = File(appDirPath, ".DepotDownloader")
+        depotDownloaderDir
+            .listFiles { f -> f.isFile && (f.name.endsWith(".manifest") || f.name.endsWith(".filelist")) }
+            ?.forEach { f ->
+                val stem = f.name.substringBeforeLast('.')
+                val parts = stem.split('_')
+                if (parts.size != 2) return@forEach
+                val depotId = parts[0].toIntOrNull() ?: return@forEach
+                val gid = parts[1].toLongOrNull() ?: return@forEach
+                if (depotId in inProgressDepots) return@forEach
+                if (installedManifests[depotId] == gid) return@forEach
+                if (File(depotDownloaderDir, "$stem.stalecleanup").isFile) return@forEach
+                if (f.delete()) {
+                    Timber.i("Pruned stale depot manifest cache ${f.name} at $appDirPath")
+                }
+            }
+        // Markers with neither a manifest nor a filelist left can never be acted on.
+        depotDownloaderDir
+            .listFiles { f -> f.isFile && f.name.endsWith(".stalecleanup") }
+            ?.forEach { f ->
+                val stem = f.name.removeSuffix(".stalecleanup")
+                val actionable =
+                    File(depotDownloaderDir, "$stem.manifest").isFile ||
+                        File(depotDownloaderDir, "$stem.filelist").isFile
+                if (!actionable && f.delete()) {
+                    Timber.i("Dropped orphaned stale-cleanup marker ${f.name} at $appDirPath")
+                }
+            }
+    }.onFailure { e -> Timber.w(e, "Stale manifest prune failed for $appDirPath") }
+}
 
 internal fun SteamService.Companion.cleanupCancelledUpdate(appDirPath: String) {
     MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)

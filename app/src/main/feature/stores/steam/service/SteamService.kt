@@ -3827,6 +3827,12 @@ class SteamService : Service() {
                 }
 
                 val installedManifestIds = readInstalledDepotManifestIds(appDirPath)
+                val hasDepotConfig =
+                    File(File(appDirPath, ".DepotDownloader"), "depot.config").exists()
+                // Steam denied a key for these, so they never enter depot.config even
+                // though the download completed — the completeness gate excludes them
+                // too. Without this they'd report an update forever.
+                val deniedDepots = readDeniedDepots(appDirPath)
                 val cachedManifestFiles: Set<String> =
                     File(appDirPath, ".DepotDownloader").list()?.toHashSet() ?: emptySet()
                 // Resolve manifests once per depot; the filter below picks which need updating and the size calc reuses these.
@@ -3841,7 +3847,16 @@ class SteamService : Service() {
                         val installedManifestId = installedManifestIds[depotId]
                         if (installedManifestId != null) {
                             installedManifestId != manifest.gid
+                        } else if (depotId in deniedDepots) {
+                            false
+                        } else if (hasDepotConfig) {
+                            // depot.config exists but omits this depot, so it isn't cleanly
+                            // installed. Trusting a cached manifest here would report "no
+                            // updates" for a depot that never finished downloading.
+                            true
                         } else {
+                            // Legacy install with no depot.config — the cached manifest is
+                            // the only installed-version signal there is.
                             "${depotId}_${manifest.gid}.manifest" !in cachedManifestFiles
                         }
                     }

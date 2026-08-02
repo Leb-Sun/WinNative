@@ -108,6 +108,9 @@ class WnSteamSession : AutoCloseable {
         fresh: Boolean,
         caBundlePath: String,
         maxWorkers: Int,
+        // One app download is several native calls (base app, then each DLC app);
+        // only the last may run the stale-file sweep, whose keep-union spans them all.
+        runCleanup: Boolean,
         listener: WnDownloadListener,
     ) {
         require(depotIds.size == manifestIds.size) {
@@ -119,7 +122,7 @@ class WnSteamSession : AutoCloseable {
             return
         }
         nativeDownloadApp(h, appId, depotIds, manifestIds, branch, installDir,
-                          fresh, caBundlePath, maxWorkers, listener)
+                          fresh, caBundlePath, maxWorkers, runCleanup, listener)
     }
 
     // Abort the current depot download.
@@ -712,6 +715,7 @@ class WnSteamSession : AutoCloseable {
             fresh: Boolean,
             caBundlePath: String,
             maxWorkers: Int,
+            runCleanup: Boolean,
             listener: WnDownloadListener,
         )
         @JvmStatic private external fun nativeCancelDownload(handle: Long)

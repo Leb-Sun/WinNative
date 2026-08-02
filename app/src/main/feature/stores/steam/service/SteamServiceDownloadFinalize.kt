@@ -478,6 +478,8 @@ internal suspend fun SteamService.Companion.completeAppDownload(
             runCatching { MarkerUtils.removeMarker(appDirPath, Marker.STEAM_DRM_PATCHED) }
             runCatching { MarkerUtils.removeMarker(appDirPath, Marker.STEAM_DRM_UNPACK_CHECKED) }
 
+            pruneStaleDepotManifestCache(appDirPath)
+
             // Same reason as above: a Room exception here used to FAIL a fully-downloaded game with the COMPLETE marker already on disk.
             val mainAppId = downloadInfo.gameId
             val service = instance

@@ -37,7 +37,7 @@ unsafe extern "C" {
     fn __android_log_write(prio: i32, tag: *const i8, text: *const i8) -> i32;
 }
 
-fn android_log(tag: &str, message: &str) {
+pub(crate) fn android_log(tag: &str, message: &str) {
     #[cfg(target_os = "android")]
     {
         let Ok(tag) = CString::new(tag) else {
@@ -3263,6 +3263,7 @@ pub extern "system" fn Java_com_winlator_cmod_feature_stores_steam_wnsteam_WnSte
     fresh: jboolean,
     ca_bundle_path: JString,
     max_workers: jint,
+    run_cleanup: jboolean,
     listener: JObject,
 ) {
     let Some(handle) = (unsafe { from_session_handle_mut(handle) }) else {
@@ -3463,6 +3464,7 @@ pub extern "system" fn Java_com_winlator_cmod_feature_stores_steam_wnsteam_WnSte
                 Some(download_cancel.as_ref()),
                 Some(progress_cb),
                 Some(code_refresher_cb),
+                run_cleanup != 0,
             );
         dispatch_download_complete(listener, result);
     });
