@@ -200,7 +200,9 @@ internal fun SteamService.Companion.createSteamShortcut(
         val desktopDir = container.getDesktopDir()
         if (!desktopDir.exists()) desktopDir.mkdirs()
 
-        val shortcutFile = File(desktopDir, "${appInfo.name}.desktop")
+        // Same sanitisation the launch path uses; a title containing "/" would
+        // otherwise create one file and be looked up under another.
+        val shortcutFile = File(desktopDir, "${appInfo.name.replace("/", "_")}.desktop")
 
         // Skip if present — rewriting on every verify/update wiped per-game [Extra Data] (wine version, dxwrapper, env vars, cover art).
         if (shortcutFile.exists() && shortcutFile.length() > 0L) {

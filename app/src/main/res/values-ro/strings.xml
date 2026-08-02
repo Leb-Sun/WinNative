@@ -113,6 +113,16 @@
     <string name="store_game_update_check_failed">Verificarea actualizărilor a eșuat</string>
     <string name="store_game_update">Actualizează</string>
     <string name="store_game_workshop">Workshop</string>
+    <string name="store_game_beta_branch">Ramură beta</string>
+    <string name="store_game_beta_branch_failed">Ramura beta nu a putut fi salvată</string>
+    <plurals name="store_game_beta_branch_count">
+        <item quantity="one">%1$d ramură</item>
+        <item quantity="few">%1$d ramuri</item>
+        <item quantity="other">%1$d de ramuri</item>
+    </plurals>
+    <string name="store_game_beta_branch_default">%1$s  (implicită)</string>
+    <string name="store_game_beta_branch_build">versiune %1$d  ·  %2$s</string>
+    <string name="store_game_beta_branch_locked">Necesită parolă</string>
     <string name="store_game_verify_files">Verifică fișierele</string>
     <string name="store_game_verify_started">Se verifică %1$s — verifică fila Descărcări</string>
     <string name="store_game_steam_options">Opțiuni Steam</string>

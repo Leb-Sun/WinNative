@@ -1356,6 +1356,11 @@ internal fun UnifiedActivity.GameManagerDialog(
     var isCheckingForUpdate by remember(app.id) { mutableStateOf(false) }
     var isUpdateCheckCoolingDown by remember(app.id) { mutableStateOf(false) }
     var showWorkshopDialog by remember(app.id) { mutableStateOf(false) }
+    var showBetaBranchesDialog by remember(app.id) { mutableStateOf(false) }
+    var betaBranches by remember(app.id) { mutableStateOf<List<StoreBetaBranchItem>>(emptyList()) }
+    var selectedBetaBranch by remember(app.id) { mutableStateOf<StoreBetaBranchItem?>(null) }
+    // Pre-install branch choice, staged until the Download button commits it.
+    var pendingBetaBranch by remember(app.id) { mutableStateOf<StoreBetaBranchItem?>(null) }
     var updateInfo by remember(app.id) { mutableStateOf<SteamService.SteamUpdateInfo?>(null) }
     var updateStatusText by remember(app.id) { mutableStateOf<String?>(null) }
     val downloadRecords by com.winlator.cmod.app.service.download.DownloadCoordinator.records.collectAsState(
@@ -1386,13 +1391,18 @@ internal fun UnifiedActivity.GameManagerDialog(
         val installed: Boolean,
     )
 
-    LaunchedEffect(app.id, downloadRecords) {
+    LaunchedEffect(app.id, downloadRecords, pendingBetaBranch) {
         val loadData =
             withContext(Dispatchers.IO) {
+                // Size the branch the download will actually fetch, so a staged
+                // pre-install pick doesn't quote the public branch's size.
+                val branch =
+                    pendingBetaBranch?.name
+                        ?: SteamService.healSelectedBetaBranch(app.id).ifBlank { "public" }
                 val selectableDlcApps = SteamService.getSelectableDlcAppsOf(app.id)
                 val perDlcSizes =
                     selectableDlcApps.associate { dlc ->
-                        dlc.id to SteamService.getDlcOnlyManifestSizes(app.id, dlc.id)
+                        dlc.id to SteamService.getDlcOnlyManifestSizes(app.id, dlc.id, branch = branch)
                     }
                 val installedDlcIds =
                     SteamService.getInstalledDlcDepotsOf(app.id)
@@ -1402,7 +1412,8 @@ internal fun UnifiedActivity.GameManagerDialog(
                     dlcApps = selectableDlcApps,
                     dlcSizes = perDlcSizes,
                     installedDlcIds = installedDlcIds,
-                    baseManifestSizes = SteamService.getInstallableSelectedManifestSizes(app.id),
+                    baseManifestSizes =
+                        SteamService.getInstallableSelectedManifestSizes(app.id, branch = branch),
                     installed = SteamService.isAppInstalled(app.id),
                 )
             }
@@ -1416,10 +1427,17 @@ internal fun UnifiedActivity.GameManagerDialog(
         isLoading = false
     }
 
-    LaunchedEffect(app.id, selectedDlcIds.toList()) {
+    LaunchedEffect(app.id, selectedDlcIds.toList(), pendingBetaBranch) {
         selectedManifestSizes =
             withContext(Dispatchers.IO) {
-                SteamService.getInstallableSelectedManifestSizes(app.id, selectedDlcIds.toList())
+                val branch =
+                    pendingBetaBranch?.name
+                        ?: SteamService.healSelectedBetaBranch(app.id).ifBlank { "public" }
+                SteamService.getInstallableSelectedManifestSizes(
+                    app.id,
+                    selectedDlcIds.toList(),
+                    branch = branch,
+                )
             }
     }
 
@@ -1471,6 +1489,17 @@ internal fun UnifiedActivity.GameManagerDialog(
             else -> stringResource(R.string.common_ui_custom)
         }
     val isReallyInstalled = installed == true
+
+    LaunchedEffect(app.id, isReallyInstalled) {
+        // An installed game switches branches; an uninstalled one stages a pick
+        // for the Download button, so both states need the list.
+        loadSteamBetaBranches(app.id) { branches, selected ->
+            betaBranches = branches
+            selectedBetaBranch = selected
+            if (isReallyInstalled) pendingBetaBranch = null
+        }
+    }
+
     val steamDownloadRecord =
         downloadRecords.firstOrNull {
             it.store == com.winlator.cmod.app.db.download.DownloadRecord.STORE_STEAM &&
@@ -1565,6 +1594,7 @@ internal fun UnifiedActivity.GameManagerDialog(
                             val installableDlcIds = dlcItems
                                 .filter { !it.isInstalled && it.id in selectedDlcIds }
                                 .map { it.id }
+                            pendingBetaBranch?.let { commitPendingBetaBranch(app.id, it) }
                             SteamService.downloadApp(app.id, installableDlcIds, false, customPath)
                             withContext(Dispatchers.Main) { onDismissRequest() }
                         }
@@ -1572,6 +1602,12 @@ internal fun UnifiedActivity.GameManagerDialog(
                 },
                 onCheckForUpdate = { startUpdateCheck(app.id, app.name) },
                 onWorkshop = { showWorkshopDialog = true },
+                onBetaBranches =
+                    if (betaBranches.size >= 2) {
+                        { showBetaBranchesDialog = true }
+                    } else {
+                        null
+                    },
                 onVerifyFiles = {
                     if (steamDownloadRecord != null) {
                         com.winlator.cmod.shared.ui.toast.WinToast.show(
@@ -1684,6 +1720,130 @@ internal fun UnifiedActivity.GameManagerDialog(
             appId = app.id,
             gameTitle = app.name,
             onDismissRequest = { showWorkshopDialog = false },
+        )
+    }
+
+    if (showBetaBranchesDialog) {
+        BetaBranchesDialog(
+            gameTitle = app.name,
+            branches = betaBranches,
+            // pendingBetaBranch is null for installed games (cleared on install).
+            selectedBranch = pendingBetaBranch ?: selectedBetaBranch,
+            onSelect = { item ->
+                showBetaBranchesDialog = false
+                if (isReallyInstalled) {
+                    persistSteamBetaBranchSelection(app.id, item, scope) { saved ->
+                        selectedBetaBranch = saved
+                        startUpdateCheck(app.id, app.name)
+                    }
+                } else {
+                    // Staged only — committed when Download is tapped.
+                    pendingBetaBranch = item
+                }
+            },
+            onDismissRequest = { showBetaBranchesDialog = false },
+        )
+    }
+}
+
+/**
+ * Reads the game's PICS branches and the currently selected one. Degrades to an
+ * empty list on failure — the menu item then simply stays hidden.
+ */
+internal suspend fun UnifiedActivity.loadSteamBetaBranches(
+    appId: Int,
+    apply: (List<StoreBetaBranchItem>, StoreBetaBranchItem?) -> Unit,
+) {
+    val loaded =
+        runCatching {
+            withContext(Dispatchers.IO) {
+                val branches =
+                    SteamService.getAppInfoOf(appId)
+                        ?.branches
+                        ?.values
+                        ?.map { b -> StoreBetaBranchItem(b.name, b.buildId, b.timeUpdated, b.pwdRequired) }
+                        // public first, then betas A-Z, as Steam orders them.
+                        ?.sortedWith(
+                            compareByDescending<StoreBetaBranchItem> {
+                                it.name.equals("public", ignoreCase = true)
+                            }.thenBy { it.name.lowercase() },
+                        )
+                        .orEmpty()
+                val selectedName = SteamService.healSelectedBetaBranch(appId).ifBlank { "public" }
+                val selected =
+                    branches.firstOrNull { it.name.equals(selectedName, ignoreCase = true) }
+                        // A retired beta can still be persisted — fall back to public.
+                        ?: branches.firstOrNull { it.name.equals("public", ignoreCase = true) }
+                branches to selected
+            }
+        }.getOrElse { e ->
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.w("UnifiedActivity", "Beta branch load failed for appId=$appId", e)
+            emptyList<StoreBetaBranchItem>() to null
+        }
+    apply(loaded.first, loaded.second)
+}
+
+/** Commits a staged pre-install pick. Failure is non-fatal: the install proceeds on public. */
+internal suspend fun UnifiedActivity.commitPendingBetaBranch(
+    appId: Int,
+    item: StoreBetaBranchItem,
+) {
+    if (!SteamService.setSelectedBetaBranch(applicationContext, appId, item.name)) {
+        withContext(Dispatchers.Main) {
+            com.winlator.cmod.shared.ui.toast.WinToast.show(
+                applicationContext,
+                getString(R.string.store_game_beta_branch_failed),
+                android.widget.Toast.LENGTH_SHORT,
+            )
+        }
+    }
+}
+
+internal fun UnifiedActivity.persistSteamBetaBranchSelection(
+    appId: Int,
+    item: StoreBetaBranchItem,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onSaved: (StoreBetaBranchItem) -> Unit,
+) {
+    scope.launch(Dispatchers.IO) {
+        val saved = SteamService.setSelectedBetaBranch(applicationContext, appId, item.name)
+        withContext(Dispatchers.Main) {
+            if (saved) {
+                onSaved(item)
+            } else {
+                com.winlator.cmod.shared.ui.toast.WinToast.show(
+                    applicationContext,
+                    getString(R.string.store_game_beta_branch_failed),
+                    android.widget.Toast.LENGTH_SHORT,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+internal fun UnifiedActivity.BetaBranchesDialog(
+    gameTitle: String,
+    branches: List<StoreBetaBranchItem>,
+    selectedBranch: StoreBetaBranchItem?,
+    onSelect: (StoreBetaBranchItem) -> Unit,
+    onDismissRequest: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismissRequest,
+        properties =
+            DialogProperties(
+                usePlatformDefaultWidth = false,
+                decorFitsSystemWindows = false,
+            ),
+    ) {
+        StoreBetaBranchScreen(
+            gameTitle = gameTitle,
+            branches = branches,
+            selectedBranch = selectedBranch,
+            onSelect = onSelect,
+            onClose = onDismissRequest,
         )
     }
 }

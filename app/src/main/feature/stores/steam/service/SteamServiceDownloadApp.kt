@@ -206,7 +206,7 @@ internal fun SteamService.Companion.downloadApp(
         appId = appId,
         downloadableDepots = downloadableDepots,
         userSelectedDlcAppIds = effectiveDlcAppIds,
-        branch = "public",
+        branch = healSelectedBetaBranch(appId).ifBlank { "public" },
         includeInstalledDepots = includeInstalledDepots,
         enableVerify = enableVerify,
         allowPersistedProgress = allowPersistedProgress,

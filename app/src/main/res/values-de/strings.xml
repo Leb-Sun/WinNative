@@ -113,6 +113,15 @@
     <string name="store_game_update_check_failed">Update-Prüfung fehlgeschlagen</string>
     <string name="store_game_update">Aktualisieren</string>
     <string name="store_game_workshop">Workshop</string>
+    <string name="store_game_beta_branch">Beta-Branch</string>
+    <string name="store_game_beta_branch_failed">Beta-Branch konnte nicht gespeichert werden</string>
+    <plurals name="store_game_beta_branch_count">
+        <item quantity="one">%1$d Branch</item>
+        <item quantity="other">%1$d Branches</item>
+    </plurals>
+    <string name="store_game_beta_branch_default">%1$s  (Standard)</string>
+    <string name="store_game_beta_branch_build">Build %1$d  ·  %2$s</string>
+    <string name="store_game_beta_branch_locked">Passwort erforderlich</string>
     <string name="store_game_verify_files">Dateien prüfen</string>
     <string name="store_game_verify_started">%1$s wird geprüft — siehe Downloads-Tab</string>
     <string name="store_game_steam_options">Steam-Optionen</string>

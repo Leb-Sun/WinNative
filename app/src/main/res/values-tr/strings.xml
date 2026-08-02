@@ -117,6 +117,14 @@
     <string name="store_game_update_check_failed">Güncelleme denetimi başarısız</string>
     <string name="store_game_update">Güncelle</string>
     <string name="store_game_workshop">Workshop</string>
+    <string name="store_game_beta_branch">Beta dalı</string>
+    <string name="store_game_beta_branch_failed">Beta dalı kaydedilemedi</string>
+    <plurals name="store_game_beta_branch_count">
+        <item quantity="other">%1$d dal</item>
+    </plurals>
+    <string name="store_game_beta_branch_default">%1$s  (varsayılan)</string>
+    <string name="store_game_beta_branch_build">sürüm %1$d  ·  %2$s</string>
+    <string name="store_game_beta_branch_locked">Parola gerekli</string>
     <string name="store_game_verify_files">Dosyaları Doğrula</string>
     <string name="store_game_verify_started">%1$s doğrulanıyor — İndirilenler sekmesini denetleyin</string>
     <string name="store_game_steam_options">Steam seçenekleri</string>

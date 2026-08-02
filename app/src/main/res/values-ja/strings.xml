@@ -117,6 +117,14 @@
     <string name="store_game_update_check_failed">更新の確認に失敗しました</string>
     <string name="store_game_update">更新</string>
     <string name="store_game_workshop">ワークショップ</string>
+    <string name="store_game_beta_branch">ベータブランチ</string>
+    <string name="store_game_beta_branch_failed">ベータブランチを保存できませんでした</string>
+    <plurals name="store_game_beta_branch_count">
+        <item quantity="other">%1$d 個のブランチ</item>
+    </plurals>
+    <string name="store_game_beta_branch_default">%1$s （デフォルト）</string>
+    <string name="store_game_beta_branch_build">ビルド %1$d  ·  %2$s</string>
+    <string name="store_game_beta_branch_locked">パスワードが必要です</string>
     <string name="store_game_verify_files">ファイルを検証</string>
     <string name="store_game_verify_started">%1$s を検証中 — ダウンロードタブを確認してください</string>
     <string name="store_game_steam_options">Steamオプション</string>

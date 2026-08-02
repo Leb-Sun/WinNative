@@ -627,6 +627,43 @@ internal fun SteamService.Companion.pruneStaleDepotManifestCache(appDirPath: Str
     }.onFailure { e -> Timber.w(e, "Stale manifest prune failed for $appDirPath") }
 }
 
+/**
+ * Records the installed branch in `steam_settings/configs.app.ini` at download
+ * completion, so a never-launched install stays detectable after a WinNative
+ * reinstall. Merges into an existing file; launch later rewrites it in full.
+ */
+internal fun SteamService.Companion.persistInstalledBranchName(
+    appId: Int,
+    appDirPath: String,
+) {
+    runCatching {
+        val branch = resolveSelectedBetaName(appId).ifBlank { "public" }
+        val ini = File(appDirPath, "steam_settings/configs.app.ini")
+        ini.parentFile?.mkdirs()
+        val isBeta = if (branch.equals("public", ignoreCase = true)) 0 else 1
+        if (!ini.isFile) {
+            ini.writeText("[app::general]\nis_beta_branch=$isBeta\nbranch_name=$branch\n")
+            return@runCatching
+        }
+        val lines = ini.readLines().toMutableList()
+        val betaIdx = lines.indexOfFirst { it.trimStart().startsWith("is_beta_branch=") }
+        if (betaIdx >= 0) lines[betaIdx] = "is_beta_branch=$isBeta"
+        val idx = lines.indexOfFirst { it.trimStart().startsWith("branch_name=") }
+        if (idx >= 0) {
+            lines[idx] = "branch_name=$branch"
+        } else {
+            val genIdx = lines.indexOfFirst { it.trim().equals("[app::general]", ignoreCase = true) }
+            if (genIdx >= 0) {
+                lines.add(genIdx + 1, "branch_name=$branch")
+            } else {
+                lines.add("[app::general]")
+                lines.add("branch_name=$branch")
+            }
+        }
+        ini.writeText(lines.joinToString("\n", postfix = "\n"))
+    }.onFailure { e -> Timber.w(e, "Failed to persist installed branch_name for appId=$appId") }
+}
+
 internal fun SteamService.Companion.cleanupCancelledUpdate(appDirPath: String) {
     MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
     MarkerUtils.removeMarker(appDirPath, Marker.DOWNLOAD_COMPLETE_MARKER)

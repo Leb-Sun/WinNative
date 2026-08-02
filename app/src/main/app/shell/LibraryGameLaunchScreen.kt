@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.AltRoute
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.FactCheck
 import androidx.compose.material.icons.outlined.ArrowDropDown
@@ -147,6 +148,7 @@ internal fun LibraryGameLaunchScreen(
     showVerifyFiles: Boolean = true,
     showCheckForUpdate: Boolean = true,
     showWorkshop: Boolean = true,
+    onBetaBranches: (() -> Unit)? = null,
     playEnabled: Boolean = true,
     playDisabledLabel: String? = null,
     /**
@@ -312,6 +314,7 @@ internal fun LibraryGameLaunchScreen(
                 onWorkshop = onWorkshop,
                 onAchievements = { onAchievements?.invoke() },
                 onCheats = { onCheats?.invoke() },
+                onBetaBranches = onBetaBranches,
             )
         }
 
@@ -877,6 +880,7 @@ private fun SourceTag(
     onWorkshop: () -> Unit = {},
     onAchievements: () -> Unit = {},
     onCheats: () -> Unit = {},
+    onBetaBranches: (() -> Unit)? = null,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var anchorHeightPx by remember { mutableStateOf(0) }
@@ -960,6 +964,13 @@ private fun SourceTag(
                         label = stringResource(R.string.retro_cheats_title),
                         enabled = cheatsEnabled,
                     ) { menuOpen = false; onCheats() }
+                }
+                if (menuEnabled && onBetaBranches != null) {
+                    LaunchSourceMenuItem(
+                        icon = Icons.AutoMirrored.Outlined.AltRoute,
+                        label = stringResource(R.string.store_game_beta_branch),
+                        enabled = areSteamActionsEnabled,
+                    ) { menuOpen = false; onBetaBranches() }
                 }
             }
         }

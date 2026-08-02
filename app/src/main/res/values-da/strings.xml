@@ -113,6 +113,15 @@
     <string name="store_game_update_check_failed">Kunne ikke tjekke for opdatering</string>
     <string name="store_game_update">Opdater</string>
     <string name="store_game_workshop">Workshop</string>
+    <string name="store_game_beta_branch">Betagren</string>
+    <string name="store_game_beta_branch_failed">Betagrenen kunne ikke gemmes</string>
+    <plurals name="store_game_beta_branch_count">
+        <item quantity="one">%1$d gren</item>
+        <item quantity="other">%1$d grene</item>
+    </plurals>
+    <string name="store_game_beta_branch_default">%1$s  (standard)</string>
+    <string name="store_game_beta_branch_build">build %1$d  ·  %2$s</string>
+    <string name="store_game_beta_branch_locked">Adgangskode påkrævet</string>
     <string name="store_game_verify_files">Bekræft filer</string>
     <string name="store_game_verify_started">Bekræfter %1$s — se fanen Downloads</string>
     <string name="store_game_steam_options">Steam-indstillinger</string>

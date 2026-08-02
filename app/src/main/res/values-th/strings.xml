@@ -117,6 +117,14 @@
     <string name="store_game_update_check_failed">ตรวจสอบการอัปเดตไม่สำเร็จ</string>
     <string name="store_game_update">อัปเดต</string>
     <string name="store_game_workshop">Workshop</string>
+    <string name="store_game_beta_branch">สาขาเบต้า</string>
+    <string name="store_game_beta_branch_failed">ไม่สามารถบันทึกสาขาเบต้าได้</string>
+    <plurals name="store_game_beta_branch_count">
+        <item quantity="other">%1$d สาขา</item>
+    </plurals>
+    <string name="store_game_beta_branch_default">%1$s  (ค่าเริ่มต้น)</string>
+    <string name="store_game_beta_branch_build">บิลด์ %1$d  ·  %2$s</string>
+    <string name="store_game_beta_branch_locked">ต้องใช้รหัสผ่าน</string>
     <string name="store_game_verify_files">ตรวจสอบไฟล์</string>
     <string name="store_game_verify_started">กำลังตรวจสอบ %1$s — ดูที่แท็บดาวน์โหลด</string>
     <string name="store_game_steam_options">ตัวเลือก Steam</string>

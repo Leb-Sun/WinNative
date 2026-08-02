@@ -113,6 +113,15 @@
     <string name="store_game_update_check_failed">Échec de la vérification des mises à jour</string>
     <string name="store_game_update">Mettre à jour</string>
     <string name="store_game_workshop">Workshop</string>
+    <string name="store_game_beta_branch">Branche bêta</string>
+    <string name="store_game_beta_branch_failed">Impossible d\'enregistrer la branche bêta</string>
+    <plurals name="store_game_beta_branch_count">
+        <item quantity="one">%1$d branche</item>
+        <item quantity="other">%1$d branches</item>
+    </plurals>
+    <string name="store_game_beta_branch_default">%1$s  (par défaut)</string>
+    <string name="store_game_beta_branch_build">build %1$d  ·  %2$s</string>
+    <string name="store_game_beta_branch_locked">Mot de passe requis</string>
     <string name="store_game_verify_files">Vérifier les fichiers</string>
     <string name="store_game_verify_started">Vérification de %1$s — consultez l\'onglet Téléchargements</string>
     <string name="store_game_steam_options">Options Steam</string>
