@@ -1283,7 +1283,7 @@ internal fun UnifiedActivity.GameSettingsDialog(
                     gameId = gameIdStr,
                     gameName = app.name,
                     shortcut = shortcut,
-                    retroSaveDir = com.winlator.cmod.feature.sync.google.GameSaveBackupManager.retroSaveDir(context, shortcut),
+                    retroSaveDir = com.winlator.cmod.feature.sync.google.GameSaveBackupManager.retroSaveDir(context, shortcut, gameIdStr),
                     onCloudSyncToggle = { enabled ->
                         cloudSyncEnabled = enabled
                         setShortcutCloudSyncEnabled(shortcut, enabled)
@@ -2887,7 +2887,7 @@ internal fun UnifiedActivity.LibraryGameDetailDialog(
                                 gameId = detailGameId,
                                 gameName = app.name,
                                 shortcut = detailShortcut,
-                                retroSaveDir = com.winlator.cmod.feature.sync.google.GameSaveBackupManager.retroSaveDir(context, detailShortcut),
+                                retroSaveDir = com.winlator.cmod.feature.sync.google.GameSaveBackupManager.retroSaveDir(context, detailShortcut, detailGameId),
                                 onCloudSyncToggle = { enabled ->
                                     cloudSyncEnabled = enabled
                                     setShortcutCloudSyncEnabled(detailShortcut, enabled)
@@ -3081,7 +3081,7 @@ internal fun UnifiedActivity.LibraryGameDetailDialog(
                                     gameId = detailGameId,
                                     gameName = app.name,
                                     shortcut = detailShortcut,
-                                    retroSaveDir = com.winlator.cmod.feature.sync.google.GameSaveBackupManager.retroSaveDir(context, detailShortcut),
+                                    retroSaveDir = com.winlator.cmod.feature.sync.google.GameSaveBackupManager.retroSaveDir(context, detailShortcut, detailGameId),
                                     onCloudSyncToggle = { enabled ->
                                         cloudSyncEnabled = enabled
                                         setShortcutCloudSyncEnabled(detailShortcut, enabled)
