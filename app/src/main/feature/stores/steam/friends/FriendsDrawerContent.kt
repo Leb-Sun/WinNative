@@ -523,7 +523,7 @@ private fun FriendActionButtons(
     onPlayGame: (SteamFriendEntry) -> Unit,
 ) {
     when {
-        friend.isJoinable -> {
+        friend.isJoinable && gameInstalled -> {
             Spacer(Modifier.width(8.dp))
             FriendActionButton(stringResource(R.string.steam_friends_join), Icons.Outlined.PlayArrow) { onJoinGame(friend) }
         }

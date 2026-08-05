@@ -4620,18 +4620,8 @@ class SteamService : Service() {
         fun mergeJson(json: String?) {
             val arr = try { JSONArray(json ?: "[]") } catch (_: Exception) { JSONArray() }
             for (i in 0 until arr.length()) {
-                val o = arr.optJSONObject(i) ?: continue
-                val sid = o.optLong("sid", 0L)
-                if (sid == 0L) continue
-                merged[sid] = SteamFriendEntry(
-                    steamId = sid,
-                    name = o.optString("name", ""),
-                    state = EPersonaState.from(o.optInt("state", 0)) ?: EPersonaState.Offline,
-                    gameAppId = o.optInt("app", 0),
-                    gameName = o.optString("gameName", ""),
-                    avatarHash = o.optString("avatarHash", ""),
-                    connectString = o.optString("connect", ""),
-                )
+                val entry = friendFromJson(arr.optJSONObject(i) ?: continue) ?: continue
+                merged[entry.steamId] = entry
             }
         }
         runCatching {
@@ -4675,18 +4665,9 @@ class SteamService : Service() {
         val byId = LinkedHashMap<Long, SteamFriendEntry>(current.size)
         for (e in current) byId[e.steamId] = e
         for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            val sid = o.optLong("sid", 0L)
-            if (sid == 0L || !byId.containsKey(sid)) continue
-            byId[sid] = SteamFriendEntry(
-                steamId = sid,
-                name = o.optString("name", ""),
-                state = EPersonaState.from(o.optInt("state", 0)) ?: EPersonaState.Offline,
-                gameAppId = o.optInt("app", 0),
-                gameName = o.optString("gameName", ""),
-                avatarHash = o.optString("avatarHash", ""),
-                connectString = o.optString("connect", ""),
-            )
+            val entry = friendFromJson(arr.optJSONObject(i) ?: continue) ?: continue
+            if (!byId.containsKey(entry.steamId)) continue
+            byId[entry.steamId] = entry
         }
         for ((id, entry) in byId.toList()) {
             if (entry.isOnline && entry.gameName.isBlank() && entry.gameAppId > 0) {
@@ -4695,6 +4676,23 @@ class SteamService : Service() {
             }
         }
         svc._friendsList.value = byId.values.toList()
+    }
+
+    private fun friendFromJson(o: JSONObject): SteamFriendEntry? {
+        val sid = o.optLong("sid", 0L)
+        if (sid == 0L) return null
+        return SteamFriendEntry(
+            steamId = sid,
+            name = o.optString("name", ""),
+            state = EPersonaState.from(o.optInt("state", 0)) ?: EPersonaState.Offline,
+            gameAppId = o.optInt("app", 0),
+            gameName = o.optString("gameName", ""),
+            avatarHash = o.optString("avatarHash", ""),
+            connectString = o.optString("connect", ""),
+            lobbyId = o.optLong("lobbyId", 0L),
+            gameServerIp = o.optLong("serverIp", 0L),
+            gameServerPort = o.optInt("serverPort", 0),
+        )
     }
 
     private val gameNameCache = java.util.concurrent.ConcurrentHashMap<Int, String>()

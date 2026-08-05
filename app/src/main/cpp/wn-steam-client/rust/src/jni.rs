@@ -2142,6 +2142,10 @@ pub extern "system" fn Java_com_winlator_cmod_feature_stores_steam_wnsteam_WnSte
                 .find(|(k, _)| k == "connect")
                 .map(|(_, v)| v.as_str())
                 .unwrap_or(""),
+            "lobbyId": persona.game_lobby_id as i64,
+            // as i64 so JSONObject.optLong keeps the full u32 range; optInt would truncate.
+            "serverIp": persona.game_server_ip as i64,
+            "serverPort": persona.game_server_port,
         }))
         .collect::<Vec<_>>())
     .to_string();

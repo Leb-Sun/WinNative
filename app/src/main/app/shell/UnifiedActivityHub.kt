@@ -638,7 +638,7 @@ internal fun UnifiedActivity.UnifiedHub() {
                                 android.widget.Toast.makeText(
                                     context, context.getString(R.string.steam_join_joining, f.name, label), android.widget.Toast.LENGTH_SHORT,
                                 ).show()
-                                launchSteamGame(context, ContainerManager(context), app, f.connectString)
+                                launchSteamGame(context, ContainerManager(context), app, f.joinArgs)
                             } else {
                                 android.widget.Toast.makeText(
                                     context,

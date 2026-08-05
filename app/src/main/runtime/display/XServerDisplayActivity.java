@@ -10963,7 +10963,9 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity {
                     ? shortcut.getSettingExtra("execArgs", container.getExecArgs())
                     : container.getExecArgs());
             if (customLaunchOptions == null) customLaunchOptions = "";
-            customLaunchOptions = customLaunchOptions.trim();
+            // On the LaunchApp path Steam builds the command line from localconfig, not the
+            // launcher argv, so a join must ride it too; the next launch rewrites it away.
+            customLaunchOptions = appendSteamJoinConnect(customLaunchOptions.trim());
             String expectedStamp = "v3|" + appId + "|" + steamUserDataId;
             String existingStamp = steamEnvStamp.exists()
                     ? FileUtils.readString(steamEnvStamp).trim() : "";
