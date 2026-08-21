@@ -107,6 +107,7 @@ import coil.compose.AsyncImage
 import coil.request.CachePolicy
 import coil.request.ImageRequest
 import com.winlator.cmod.R
+import com.winlator.cmod.shared.ui.layout.isPortraitLayout
 import androidx.compose.runtime.CompositionLocalProvider
 import com.winlator.cmod.shared.ui.focus.controllerFocusGlow
 import com.winlator.cmod.shared.ui.outlinedSwitchColors
@@ -361,15 +362,12 @@ internal fun LibraryGameLaunchScreen(
                 }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(contentGap),
-                verticalAlignment = Alignment.Bottom,
-            ) {
+            val portraitHero = isPortraitLayout()
+            val statChips: @Composable (Modifier) -> Unit = { statsModifier ->
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.weight(1f),
+                    modifier = statsModifier,
                 ) {
                     if (totalPlaytimeMillis > 0L) {
                         val playtimeText = remember(totalPlaytimeMillis) { formatLibraryPlaytime(totalPlaytimeMillis) }
@@ -402,9 +400,11 @@ internal fun LibraryGameLaunchScreen(
                         )
                     }
                 }
+            }
 
+            val actionBlock: @Composable (Modifier) -> Unit = { actionsModifier ->
                 Column(
-                    modifier = Modifier.width(actionWidth),
+                    modifier = actionsModifier,
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
@@ -486,6 +486,25 @@ internal fun LibraryGameLaunchScreen(
                             )
                         }
                     }
+                }
+            }
+
+            if (portraitHero) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(contentGap),
+                ) {
+                    statChips(Modifier.fillMaxWidth())
+                    actionBlock(Modifier.fillMaxWidth())
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(contentGap),
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    statChips(Modifier.weight(1f))
+                    actionBlock(Modifier.width(actionWidth))
                 }
             }
         }
