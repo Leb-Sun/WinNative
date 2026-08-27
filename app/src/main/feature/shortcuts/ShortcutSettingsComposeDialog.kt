@@ -52,6 +52,7 @@ import com.winlator.cmod.feature.settings.GraphicsDriverConfigUtils
 import com.winlator.cmod.feature.settings.WineD3DConfigUtils
 import com.winlator.cmod.feature.setup.SetupWizardActivity
 import com.winlator.cmod.feature.stores.steam.events.AndroidEvent
+import com.winlator.cmod.feature.stores.steam.service.SteamService
 import com.winlator.cmod.runtime.compat.box64.Box64Preset
 import com.winlator.cmod.runtime.compat.box64.Box64PresetManager
 import com.winlator.cmod.runtime.container.Container
@@ -374,6 +375,18 @@ class ShortcutSettingsComposeDialog private constructor(
         state.name.value = shortcut.getExtra("custom_name", shortcut.name).ifBlank { shortcut.name }
         state.launchExePath.value = resolveInitialLaunchExePath()
         state.launchExeDisplayPath.value = resolveLaunchExeDisplayPath(state.launchExePath.value)
+        // Hint shows the args the active launch option appends: the explicit pick immediately, then
+        // (for an untouched Steam shortcut) the default entry's own args resolved from appinfo, so it
+        // reflects what Steam already applies rather than showing blank.
+        state.launchOptionArgs.value = shortcut.getExtra("launch_option_args")
+        if (shortcut.getExtra("game_source") == "STEAM") {
+            shortcut.getExtra("app_id").toIntOrNull()?.let { appId ->
+                CoroutineScope(Dispatchers.IO).launch {
+                    val active = SteamService.getSelectedLaunchOption(context, appId)?.second
+                    withContext(Dispatchers.Main) { state.launchOptionArgs.value = active.orEmpty() }
+                }
+            }
+        }
         syncLibraryArtworkState()
 
         val inputType = Integer.parseInt(
@@ -517,6 +530,24 @@ class ShortcutSettingsComposeDialog private constructor(
                 .toIntOrNull()
                 ?.coerceIn(0, 100)
                 ?: 100
+
+        state.frameGenEnabled.value =
+            getShortcutSetting("frameGen", container.getExtra("frameGen", "0")) == "1"
+        state.frameGenMultiplier.intValue =
+            getShortcutSetting("frameGenMultiplier", container.getExtra("frameGenMultiplier", "2"))
+                .toIntOrNull()
+                ?.coerceIn(2, 4)
+                ?: 2
+        state.frameGenTargetRate.intValue =
+            getShortcutSetting("frameGenTargetRate", container.getExtra("frameGenTargetRate", "0"))
+                .toIntOrNull()
+                ?.coerceAtLeast(0)
+                ?: 0
+        state.frameGenFlowScale.intValue =
+            getShortcutSetting("frameGenFlowScale", container.getExtra("frameGenFlowScale", "70"))
+                .toIntOrNull()
+                ?.coerceIn(25, 100)
+                ?: 70
 
         // shortcut override else container value; legacy single reshadeEffect/flat params migrated in parse
         val reshadeEffects = com.winlator.cmod.runtime.reshade.ReshadeManager.scanEffects(context)
@@ -1249,6 +1280,14 @@ class ShortcutSettingsComposeDialog private constructor(
             // Launch EXE path
             val launchExePath = normalizeLaunchExeForShortcut(state.launchExePath.value)
             if (launchExePath.isNotEmpty()) {
+                val storedExePath = SteamService.normalizeRelativeExe(shortcut.getExtra("launch_exe_path"))
+                // A manual exe CHANGE turns the Steam launch option off ("" marker, not key removal).
+                // Normalized compare: appinfo '\'/case variants of the same exe must not false-trigger.
+                if (!SteamService.normalizeRelativeExe(launchExePath).equals(storedExePath, ignoreCase = true)) {
+                    shortcut.putExtra("launch_exe_args", null)
+                    shortcut.putExtra("launch_option_exe", "")
+                    shortcut.putExtra("launch_option_args", null)
+                }
                 shortcut.putExtra("launch_exe_path", launchExePath)
                 val gameSource = shortcut.getExtra("game_source", "")
                 if (gameSource == "CUSTOM") {
@@ -1296,6 +1335,27 @@ class ShortcutSettingsComposeDialog private constructor(
                 shortcut.putExtra("sgsrUpscaleMode", null)
                 shortcut.putExtra("sgsrSharpness", null)
             }
+
+            hasContainerOverride = hasContainerOverride or saveOverride(
+                "frameGen",
+                if (state.frameGenEnabled.value) "1" else "0",
+                container.getExtra("frameGen", "0"),
+            )
+            hasContainerOverride = hasContainerOverride or saveOverride(
+                "frameGenMultiplier",
+                state.frameGenMultiplier.intValue.coerceIn(2, 4).toString(),
+                container.getExtra("frameGenMultiplier", "2"),
+            )
+            hasContainerOverride = hasContainerOverride or saveOverride(
+                "frameGenTargetRate",
+                state.frameGenTargetRate.intValue.coerceAtLeast(0).toString(),
+                container.getExtra("frameGenTargetRate", "0"),
+            )
+            hasContainerOverride = hasContainerOverride or saveOverride(
+                "frameGenFlowScale",
+                state.frameGenFlowScale.intValue.coerceIn(25, 100).toString(),
+                container.getExtra("frameGenFlowScale", "70"),
+            )
 
             // saveOverride not putExtra: putExtra leaves hasContainerOverride false, so a reshade-only shortcut gets use_container_defaults=1 and reads back the container's extras
             run {
