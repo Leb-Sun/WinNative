@@ -430,6 +430,7 @@ class GameSettingsStateHolder {
     val sgsrEnabled = mutableStateOf(false)
     val sgsrUpscaleMode = mutableIntStateOf(1)
     val sgsrSharpness = mutableIntStateOf(100)
+    val displayScaleFilter = mutableIntStateOf(0)
 
     val frameGenEnabled = mutableStateOf(false)
     val frameGenMultiplier = mutableIntStateOf(2)
@@ -1576,6 +1577,28 @@ private fun GeneralSection(
                     selectedIndex = state.selectedRefreshRate.intValue,
                     onSelected = { state.selectedRefreshRate.intValue = it }
                 )
+            }
+        }
+
+        // Per-game (the in-game drawer's Scale, same stored value); None presents at the screen size above.
+        if (!state.isContainerEditMode.value) {
+            Spacer(Modifier.height(SettingItemGap))
+            SettingPairRow {
+                Box(Modifier.weight(1f)) {
+                    SettingDropdown(
+                        label = stringResource(R.string.session_drawer_scale),
+                        entries = listOf(
+                            stringResource(R.string.container_presets_built_in),
+                            stringResource(R.string.session_drawer_scale_nearest),
+                            stringResource(R.string.session_drawer_scale_linear),
+                            stringResource(R.string.session_drawer_scale_bicubic),
+                            stringResource(R.string.session_drawer_scale_none),
+                        ),
+                        selectedIndex = state.displayScaleFilter.intValue,
+                        onSelected = { state.displayScaleFilter.intValue = it }
+                    )
+                }
+                Box(Modifier.weight(1f))
             }
         }
 

@@ -1564,6 +1564,7 @@ Chemin installé :
     <string name="session_drawer_scale_nearest">Plus proche</string>
     <string name="session_drawer_scale_linear">Linéaire</string>
     <string name="session_drawer_scale_bicubic">Bicubique</string>
+    <string name="session_drawer_scale_none">Aucun (système)</string>
     <string name="session_drawer_color_profile_ntsc">NTSC</string>
     <string name="session_drawer_color_profile_ntsc2">NTSC2</string>
     <string name="session_drawer_color_profile_toon">Cartoon</string>

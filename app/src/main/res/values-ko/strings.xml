@@ -1565,6 +1565,7 @@
     <string name="session_drawer_scale_nearest">최근접</string>
     <string name="session_drawer_scale_linear">선형</string>
     <string name="session_drawer_scale_bicubic">바이큐빅</string>
+    <string name="session_drawer_scale_none">없음 (시스템)</string>
     <string name="session_drawer_color_profile_ntsc">NTSC</string>
     <string name="session_drawer_color_profile_ntsc2">NTSC2</string>
     <string name="session_drawer_color_profile_toon">카툰</string>

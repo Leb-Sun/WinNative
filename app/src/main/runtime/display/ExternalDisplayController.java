@@ -222,6 +222,10 @@ public final class ExternalDisplayController {
         return swapActive;
     }
 
+    public boolean isRenderBufferActive() {
+        return renderActive;
+    }
+
     public Display findExternalDisplay() {
         if (displayManager == null) return null;
         Display[] presentationDisplays =

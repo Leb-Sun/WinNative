@@ -822,6 +822,7 @@ T.ex. <b>META</b> för <i>META-tangent</i>, \n
     <string name="session_drawer_scale_nearest">Närmaste</string>
     <string name="session_drawer_scale_linear">Linjär</string>
     <string name="session_drawer_scale_bicubic">Bikubisk</string>
+    <string name="session_drawer_scale_none">Ingen (system)</string>
     <string name="session_drawer_saturation">Mättnad</string>
     <string name="session_drawer_temperature">Temperatur</string>
     <string name="session_drawer_tint">Nyans</string>

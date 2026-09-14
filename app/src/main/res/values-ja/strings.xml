@@ -822,6 +822,7 @@
     <string name="session_drawer_scale_nearest">ニアレスト</string>
     <string name="session_drawer_scale_linear">リニア</string>
     <string name="session_drawer_scale_bicubic">バイキュービック</string>
+    <string name="session_drawer_scale_none">なし（システム）</string>
     <string name="session_drawer_saturation">彩度</string>
     <string name="session_drawer_temperature">色温度</string>
     <string name="session_drawer_tint">色合い</string>

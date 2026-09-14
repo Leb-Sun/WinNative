@@ -459,6 +459,12 @@ internal fun ScreenEffectsPaneContent(
                         checked = state.scaleFilter == 3,
                         onCheckedChange = { on -> listener.onScaleFilterSelected(if (on) 3 else 0) },
                     )
+
+                    NavBooleanRow(
+                        title = stringResource(R.string.session_drawer_scale_none),
+                        checked = state.scaleFilter == 4,
+                        onCheckedChange = { on -> listener.onScaleFilterSelected(if (on) 4 else 0) },
+                    )
                 }
             }
         }

@@ -822,6 +822,7 @@ Por ejemplo, <b>META</b> para la <i>tecla META</i>, \n
     <string name="session_drawer_scale_nearest">Más cercano</string>
     <string name="session_drawer_scale_linear">Lineal</string>
     <string name="session_drawer_scale_bicubic">Bicúbico</string>
+    <string name="session_drawer_scale_none">Ninguno (sistema)</string>
     <string name="session_drawer_saturation">Saturación</string>
     <string name="session_drawer_temperature">Temperatura</string>
     <string name="session_drawer_tint">Tono</string>

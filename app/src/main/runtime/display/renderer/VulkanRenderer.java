@@ -1040,10 +1040,13 @@ public class VulkanRenderer
     public static final int SCALE_FILTER_NEAREST = 1;
     public static final int SCALE_FILTER_LINEAR  = 2;
     public static final int SCALE_FILTER_BICUBIC = 3;
+    // Java-only: the activity presents at the X screen size and the display scales, so the pass is 1:1.
+    public static final int SCALE_FILTER_NONE    = 4;
 
     private int requestedScaleFilter = SCALE_FILTER_OFF;
 
     public void setScaleFilter(int mode) {
+        if (mode == SCALE_FILTER_NONE) mode = SCALE_FILTER_NEAREST;
         requestedScaleFilter = mode;
         if (nativeHandle != 0) {
             nativeSetScaleFilter(nativeHandle, mode);

@@ -1564,6 +1564,7 @@
     <string name="session_drawer_scale_nearest">最近邻</string>
     <string name="session_drawer_scale_linear">线性</string>
     <string name="session_drawer_scale_bicubic">双三次</string>
+    <string name="session_drawer_scale_none">无（系统）</string>
     <string name="session_drawer_color_profile_ntsc">NTSC</string>
     <string name="session_drawer_color_profile_ntsc2">NTSC2</string>
     <string name="session_drawer_color_profile_toon">卡通</string>

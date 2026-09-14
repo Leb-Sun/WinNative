@@ -822,6 +822,7 @@ E.g. <b>META</b> için <i>META tuşu</i>, \n
     <string name="session_drawer_scale_nearest">En Yakın</string>
     <string name="session_drawer_scale_linear">Doğrusal</string>
     <string name="session_drawer_scale_bicubic">Çift Kübik</string>
+    <string name="session_drawer_scale_none">Yok (sistem)</string>
     <string name="session_drawer_saturation">Doygunluk</string>
     <string name="session_drawer_temperature">Sıcaklık</string>
     <string name="session_drawer_tint">Ton</string>

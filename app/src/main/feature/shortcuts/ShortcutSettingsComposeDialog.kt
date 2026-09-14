@@ -531,6 +531,11 @@ class ShortcutSettingsComposeDialog private constructor(
                 ?.coerceIn(0, 100)
                 ?: 100
 
+        // Same per-game screen-effects JSON the in-game drawer writes.
+        state.displayScaleFilter.intValue = runCatching {
+            org.json.JSONObject(shortcut.getExtra("screenEffectsSettings", "")).optInt("scaleFilter", 0)
+        }.getOrDefault(0).coerceIn(0, 4)
+
         state.frameGenEnabled.value =
             getShortcutSetting("frameGen", container.getExtra("frameGen", "0")) == "1"
         state.frameGenMultiplier.intValue =
@@ -1334,6 +1339,16 @@ class ShortcutSettingsComposeDialog private constructor(
                 shortcut.putExtra("sgsrEnabled", null)
                 shortcut.putExtra("sgsrUpscaleMode", null)
                 shortcut.putExtra("sgsrSharpness", null)
+            }
+
+            val effectsJson = shortcut.getExtra("screenEffectsSettings", "")
+            val scaleFilter = state.displayScaleFilter.intValue.coerceIn(0, 4)
+            if (effectsJson.isNotEmpty() || scaleFilter != 0) {
+                val effects = runCatching { org.json.JSONObject(effectsJson) }.getOrElse { org.json.JSONObject() }
+                if (effects.optInt("scaleFilter", 0) != scaleFilter) {
+                    effects.put("scaleFilter", scaleFilter)
+                    shortcut.putExtra("screenEffectsSettings", effects.toString())
+                }
             }
 
             hasContainerOverride = hasContainerOverride or saveOverride(

@@ -1470,6 +1470,7 @@
     <string name="session_drawer_scale_nearest">Ближайший</string>
     <string name="session_drawer_scale_linear">Линейный</string>
     <string name="session_drawer_scale_bicubic">Бикубический</string>
+    <string name="session_drawer_scale_none">Нет (система)</string>
     <string name="session_drawer_color_profile_ntsc">NTSC</string>
     <string name="session_drawer_color_profile_ntsc2">NTSC2</string>
     <string name="session_drawer_color_profile_toon">Мультяшный</string>

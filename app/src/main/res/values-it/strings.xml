@@ -1564,6 +1564,7 @@ Percorso installato:
     <string name="session_drawer_scale_nearest">Più vicino</string>
     <string name="session_drawer_scale_linear">Lineare</string>
     <string name="session_drawer_scale_bicubic">Bicubico</string>
+    <string name="session_drawer_scale_none">Nessuno (sistema)</string>
     <string name="session_drawer_color_profile_ntsc">NTSC</string>
     <string name="session_drawer_color_profile_ntsc2">NTSC2</string>
     <string name="session_drawer_color_profile_toon">Cartoon</string>

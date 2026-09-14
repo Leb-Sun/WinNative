@@ -477,6 +477,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
     private int contrast = 0;
     private int gammaPercent = 100;
     private int scaleFilter = 0;
+    private boolean presentingAtScreenSize = false;
     private int saturation = 100;
     private int temperature = 0;
     private int tint = 0;
@@ -2095,6 +2096,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
                             if (r != null && !r.isFullscreen()) {
                                 r.toggleFullscreen();
                                 touchpadView.toggleFullscreen();
+                                applyPresentScaling();
                                 renderDrawerMenu();
                             }
                         });
@@ -5791,6 +5793,40 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
         }
 
         renderer.setScaleFilter(scaleFilter);
+        applyPresentScaling();
+    }
+
+    // None: present the X screen at its own size and let the display (or a system upscaler) scale it.
+    private void applyPresentScaling() {
+        if (xServerView == null || xServer == null) return;
+        if (externalDisplayController != null && externalDisplayController.isSwapActive()) {
+            // The external-display controller owns the surface size while the game is on its display.
+            if (presentingAtScreenSize && !externalDisplayController.isRenderBufferActive()) {
+                xServerView.getHolder().setSizeFromLayout();
+            }
+            presentingAtScreenSize = false;
+            return;
+        }
+        int[] size = scaleFilter == VulkanRenderer.SCALE_FILTER_NONE ? screenPresentSize() : null;
+        if (size != null) {
+            xServerView.getHolder().setFixedSize(size[0], size[1]);
+            presentingAtScreenSize = true;
+        } else if (presentingAtScreenSize) {
+            presentingAtScreenSize = false;
+            xServerView.getHolder().setSizeFromLayout();
+        }
+    }
+
+    // Smallest buffer with the view's shape that holds the X screen 1:1; stretch mode uses the screen itself.
+    private int[] screenPresentSize() {
+        int vw = xServerView.getWidth(), vh = xServerView.getHeight();
+        int sw = xServer.screenInfo.width, sh = xServer.screenInfo.height;
+        if (vw <= 0 || vh <= 0 || sw <= 0 || sh <= 0 || (sw >= vw && sh >= vh)) return null;
+        VulkanRenderer renderer = xServerView.getRenderer();
+        if (renderer != null && renderer.isFullscreen()) return new int[]{sw, sh};
+        float s = Math.max((float) sw / vw, (float) sh / vh);
+        if (s >= 1f) return null;
+        return new int[]{Math.round(vw * s), Math.round(vh * s)};
     }
 
     private void loadScreenEffectsSettings() {
@@ -6032,6 +6068,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
             case R.id.main_menu_toggle_fullscreen:
                 renderer.toggleFullscreen();
                 touchpadView.toggleFullscreen();
+                applyPresentScaling();
                 renderDrawerMenu();
                 break;
             case R.id.main_menu_refactor_size:
@@ -7708,6 +7745,10 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
     private void setupUI() {
         FrameLayout rootView = xServerDisplayFrame;
         xServerView = new XServerSurfaceView(this, xServer);
+        // Re-fit the None present size when the view resizes (rotation, return from an external display).
+        xServerView.addOnLayoutChangeListener((v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) applyPresentScaling();
+        });
         final VulkanRenderer renderer = xServerView.getRenderer();
         // Match guest libvulkan so imported AHB tiling matches the producer.
         String compositorGraphicsDriver =
@@ -7861,6 +7902,7 @@ public class XServerDisplayActivity extends FixedFontScaleAppCompatActivity
                     @Override
                     public void onSwapStateChanged(boolean swapActive) {
                         runOnUiThread(() -> {
+                            applyPresentScaling();
                             // On return-to-phone, re-measure the display frame to reclaim full size.
                             if (!swapActive && drawerStateHolder != null) {
                                 drawerStateHolder.requestPhoneRelayout();

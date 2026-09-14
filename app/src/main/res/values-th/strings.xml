@@ -822,6 +822,7 @@
     <string name="session_drawer_scale_nearest">Nearest</string>
     <string name="session_drawer_scale_linear">Linear</string>
     <string name="session_drawer_scale_bicubic">Bicubic</string>
+    <string name="session_drawer_scale_none">ไม่มี (ระบบ)</string>
     <string name="session_drawer_saturation">ความอิ่มตัวสี</string>
     <string name="session_drawer_temperature">อุณหภูมิสี</string>
     <string name="session_drawer_tint">โทนสี</string>

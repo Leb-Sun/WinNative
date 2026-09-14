@@ -822,6 +822,7 @@ E.g. <b>META</b> for <i>META-näppäin</i>, \n
     <string name="session_drawer_scale_nearest">Lähin</string>
     <string name="session_drawer_scale_linear">Lineaarinen</string>
     <string name="session_drawer_scale_bicubic">Bikuubinen</string>
+    <string name="session_drawer_scale_none">Ei mitään (järjestelmä)</string>
     <string name="session_drawer_saturation">Kylläisyys</string>
     <string name="session_drawer_temperature">Lämpötila</string>
     <string name="session_drawer_tint">Sävy</string>

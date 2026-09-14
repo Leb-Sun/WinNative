@@ -1564,6 +1564,7 @@ Installierter Pfad:
     <string name="session_drawer_scale_nearest">Nächste</string>
     <string name="session_drawer_scale_linear">Linear</string>
     <string name="session_drawer_scale_bicubic">Bikubisch</string>
+    <string name="session_drawer_scale_none">Keine (System)</string>
     <string name="session_drawer_color_profile_ntsc">NTSC</string>
     <string name="session_drawer_color_profile_ntsc2">NTSC2</string>
     <string name="session_drawer_color_profile_toon">Cartoon</string>

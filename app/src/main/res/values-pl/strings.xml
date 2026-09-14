@@ -1570,6 +1570,7 @@ Zainstalowana ścieżka:
     <string name="session_drawer_scale_nearest">Najbliższe</string>
     <string name="session_drawer_scale_linear">Liniowe</string>
     <string name="session_drawer_scale_bicubic">Dwusześcienne</string>
+    <string name="session_drawer_scale_none">Brak (system)</string>
     <string name="session_drawer_color_profile_ntsc">NTSC</string>
     <string name="session_drawer_color_profile_ntsc2">NTSC2</string>
     <string name="session_drawer_color_profile_toon">Kreskówka</string>
